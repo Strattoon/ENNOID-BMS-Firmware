@@ -1,87 +1,216 @@
 /*
-	Host unit test: Sprig BMS CAN v1 codec against the spec test vectors
-	(Sprig-Flight-Director docs/architecture/sprig-bms-can-v1.md, "Test vectors").
-	Every frame is produced by the firmware's own encoder (libSprigCan.c) from
-	physical values, through the same scaling the firmware uses.
+	Host unit test: Sprig BMS CAN v1 encoder against the authoritative vector file
+	(Sprig-Flight-Director docs/architecture/sprig-bms-can-v1-vectors.tsv, vendored in
+	tests/sprig/vectors/ and pinned to a Flight Director commit; see tests/sprig/vectors/SOURCE).
+
+	Every "decoded" row is encoded from its physical field values by the firmware's own encoder
+	(libSprigCan.c), through the same scaling modSprig.c uses, and must match byte for byte.
+	Change the vector file, not this code.
  */
 
 #include "sprig_test.h"
 #include "libSprigCan.h"
+#include <stdlib.h>
 #include <string.h>
 
-static void expectFrame(const char *name, const uint8_t *actual, const uint8_t expected[8]) {
-	bool same = memcmp(actual, expected, 8) == 0;
-	if(!same) {
-		printf("  got      %02X %02X %02X %02X %02X %02X %02X %02X\n", actual[0], actual[1], actual[2], actual[3], actual[4], actual[5], actual[6], actual[7]);
-		printf("  expected %02X %02X %02X %02X %02X %02X %02X %02X\n", expected[0], expected[1], expected[2], expected[3], expected[4], expected[5], expected[6], expected[7]);
+#define VECTOR_LINE_MAX   1024
+#define VECTOR_COLUMNS    7
+
+typedef struct {
+	char    *caseName;
+	char    *id;
+	char    *counter;
+	char    *frame;
+	char    *expect;
+	char    *lost;
+	char    *fields;
+} vectorRowTypedef;
+
+static int vectorFieldsFound;
+
+// Value of "key=value" in the space-separated fields column; a "!invalid" suffix is stripped because
+// the encoder still has to produce the raw reserved value. Returns NULL if the key is absent.
+static const char *vectorField(const char *fields, const char *key) {
+	static char value[64];
+	size_t keyLength = strlen(key);
+	const char *p = fields;
+
+	while(*p) {
+		while(*p == ' ')
+			p++;
+		if(strncmp(p, key, keyLength) == 0 && p[keyLength] == '=') {
+			const char *start = p + keyLength + 1;
+			size_t n = strcspn(start, " !");
+			if(n >= sizeof(value))
+				n = sizeof(value) - 1;
+			memcpy(value, start, n);
+			value[n] = '\0';
+			vectorFieldsFound++;
+			return value;
+		}
+		p += strcspn(p, " ");
 	}
-	SPRIG_CHECK(name, same);
+	return NULL;
 }
 
-static uint16_t deci(float value) { return (uint16_t)libSprigCanScale(value, 10.0f, 0, 0xFFFE, 0xFFFF); }
-static int16_t  deciSigned(float value) { return (int16_t)libSprigCanScale(value, 10.0f, -32768, 32767, 0); }
+static float vectorFloat(const char *fields, const char *key) {
+	const char *value = vectorField(fields, key);
+	if(!value || strcmp(value, "unavailable") == 0)
+		return NAN;                                                                  // The spec sentinel: the firmware encodes NaN as unavailable
+	return strtof(value, NULL);
+}
+
+static unsigned long vectorInt(const char *fields, const char *key) {
+	const char *value = vectorField(fields, key);
+	return value ? strtoul(value, NULL, 0) : 0xFFFFFFFFul;                          // 0x.. and decimal
+}
+
+static int vectorFrameBytes(const char *text, uint8_t *bytes) {
+	int count = 0;
+	char *end;
+
+	while(*text && count < 16) {
+		unsigned long value = strtoul(text, &end, 16);
+		if(end == text)
+			break;
+		bytes[count++] = (uint8_t)value;
+		text = end;
+	}
+	return count;
+}
+
+// Encode one decoded row with the firmware encoder, using the scaling from modSprigBuildFrame().
+static bool vectorEncode(uint16_t id, uint8_t counter, const char *f, uint8_t frame[SPRIG_CAN_DLC]) {
+	switch(id) {
+		case SPRIG_CAN_ID_STATE: {
+			libSprigCanStateFrameTypedef s = {(uint8_t)vectorInt(f, "state"), (uint8_t)vectorInt(f, "relay_outputs"), (uint8_t)vectorInt(f, "permissions"),
+			                                  (uint8_t)vectorInt(f, "faults_a"), (uint8_t)vectorInt(f, "faults_b"), (uint8_t)vectorInt(f, "last_open_reason")};
+			libSprigCanPackState(&s, counter, frame);
+			} return true;
+		case SPRIG_CAN_ID_PACK: {
+			libSprigCanPackFrameTypedef p;
+			p.packVoltageDeciVolt = (uint16_t)libSprigCanScale(vectorFloat(f, "pack_voltage"), 10.0f, 0, 0xFFFF, 0);
+			p.packCurrentDeciAmp  = (int16_t)libSprigCanScale(vectorFloat(f, "pack_current"), 10.0f, -32768, 32767, 0);   // Spec sign: + = discharge
+			p.busVoltageDeciVolt  = (uint16_t)libSprigCanScale(vectorFloat(f, "bus_voltage"), 10.0f, 0, 0xFFFE, SPRIG_CAN_BUS_VOLTAGE_UNAVAILABLE);
+			libSprigCanPackPack(&p, counter, frame);
+			} return true;
+		case SPRIG_CAN_ID_LIMITS: {
+			libSprigCanLimitsFrameTypedef l;
+			l.dischargeCurrentLimitDeciAmp = (uint16_t)libSprigCanScale(vectorFloat(f, "discharge_current_limit"), 10.0f, 0, 0xFFFF, 0);
+			l.chargeCurrentLimitDeciAmp    = (uint16_t)libSprigCanScale(vectorFloat(f, "charge_current_limit"), 10.0f, 0, 0xFFFF, 0);
+			l.stateOfChargeCentiPercent    = (uint16_t)libSprigCanScale(vectorFloat(f, "state_of_charge"), 100.0f, 0, 10000, 0);
+			libSprigCanPackLimits(&l, counter, frame);
+			} return true;
+		case SPRIG_CAN_ID_CELLS: {
+			// The file gives millivolts; the firmware scales volts x 1000.
+			libSprigCanCellsFrameTypedef c;
+			c.cellVoltageMinMilliVolt = (uint16_t)libSprigCanScale(vectorFloat(f, "cell_voltage_min") / 1000.0f, 1000.0f, 0, 0xFFFF, 0);
+			c.cellVoltageMaxMilliVolt = (uint16_t)libSprigCanScale(vectorFloat(f, "cell_voltage_max") / 1000.0f, 1000.0f, 0, 0xFFFF, 0);
+			c.cellIndexMin = (uint8_t)vectorInt(f, "cell_index_min");
+			c.cellIndexMax = (uint8_t)vectorInt(f, "cell_index_max");
+			libSprigCanPackCells(&c, counter, frame);
+			} return true;
+		case SPRIG_CAN_ID_TEMPS: {
+			libSprigCanTempsFrameTypedef t;
+			t.cellTempMaxDeciC = (int16_t)libSprigCanScale(vectorFloat(f, "cell_temp_max"), 10.0f, -32768, 32767, 0);
+			t.cellTempAvgDeciC = (int16_t)libSprigCanScale(vectorFloat(f, "cell_temp_avg"), 10.0f, -32768, 32767, 0);
+			t.bmsTempMaxC      = (int8_t)libSprigCanScale(vectorFloat(f, "bms_temp_max"), 1.0f, -128, 127, 0);
+			libSprigCanPackTemps(&t, counter, frame);
+			} return true;
+		case SPRIG_CAN_ID_ENERGY: {
+			libSprigCanEnergyFrameTypedef e;
+			e.remainingCapacityCentiAh = (uint16_t)libSprigCanScale(vectorFloat(f, "remaining_capacity"), 100.0f, 0, 0xFFFF, 0);
+			e.fullCapacityCentiAh      = (uint16_t)libSprigCanScale(vectorFloat(f, "full_capacity"), 100.0f, 0, 0xFFFF, 0);
+			e.seriesCells              = (uint8_t)vectorInt(f, "series_cells");
+			libSprigCanPackEnergy(&e, counter, frame);
+			} return true;
+		case SPRIG_CAN_ID_IDENT: {
+			libSprigCanIdentFrameTypedef i = {(uint32_t)vectorInt(f, "firmware_build"), (uint8_t)vectorInt(f, "config_revision"), (uint8_t)vectorInt(f, "hardware_id")};
+			libSprigCanPackIdent(&i, counter, frame);
+			} return true;
+		default:
+			return false;
+	}
+}
+
+static bool vectorCrcValid(uint16_t id, const uint8_t *frame) {
+	uint8_t crcInput[9] = {(uint8_t)(id >> 8), (uint8_t)id};
+	memcpy(&crcInput[2], frame, 7);
+	return libSprigCanCrc8(crcInput, 9) == frame[7];
+}
+
+static void testVectorRow(const vectorRowTypedef *row) {
+	char name[160];
+	uint8_t expected[16], frame[SPRIG_CAN_DLC];
+	int length = vectorFrameBytes(row->frame, expected);
+	bool standard = strncmp(row->id, "std:", 4) == 0;
+	uint16_t id = (uint16_t)strtoul(row->id + 4, NULL, 16);
+
+	if(strcmp(row->expect, "decoded") == 0) {
+		snprintf(name, sizeof(name), "vector %s: encoder reproduces %s#%s", row->caseName, row->id, row->frame);
+		vectorFieldsFound = 0;
+		bool encoded = standard && length == SPRIG_CAN_DLC && vectorEncode(id, (uint8_t)strtoul(row->counter, NULL, 10), row->fields, frame);
+		bool same = encoded && memcmp(frame, expected, SPRIG_CAN_DLC) == 0;
+		if(encoded && !same)
+			printf("  got      %02X %02X %02X %02X %02X %02X %02X %02X\n", frame[0], frame[1], frame[2], frame[3], frame[4], frame[5], frame[6], frame[7]);
+		SPRIG_CHECK(name, same && vectorFieldsFound >= 3);
+	}else if(strcmp(row->expect, "bad_crc") == 0) {
+		snprintf(name, sizeof(name), "vector %s: the firmware CRC rejects it", row->caseName);
+		SPRIG_CHECK(name, length == SPRIG_CAN_DLC && !vectorCrcValid(id, expected));
+	}else if(strcmp(row->expect, "wrong_version") == 0) {
+		snprintf(name, sizeof(name), "vector %s: CRC valid, only the version differs", row->caseName);
+		SPRIG_CHECK(name, length == SPRIG_CAN_DLC && vectorCrcValid(id, expected) && (expected[6] >> 4) != SPRIG_CAN_PROTOCOL_VERSION);
+	}else if(strcmp(row->expect, "ignored") == 0 && standard && id == SPRIG_CAN_ID_FORBIDDEN) {
+		snprintf(name, sizeof(name), "vector %s: 0x%03X is the ID the firmware never transmits", row->caseName, id);
+		SPRIG_CHECK(name, id == SPRIG_CAN_ID_FORBIDDEN);
+	}
+	// wrong_length, repeated_counter and not_mine are decoder-side cases.
+}
+
+static void testVectorFile(const char *path) {
+	char line[VECTOR_LINE_MAX];
+	int rows = 0, decodedRows = 0;
+	FILE *file = fopen(path, "r");
+
+	SPRIG_CHECK("vector file opens", file != NULL);
+	if(!file)
+		return;
+
+	while(fgets(line, sizeof(line), file)) {
+		char *columns[VECTOR_COLUMNS];
+		int count = 0;
+		char *p = line;
+
+		line[strcspn(line, "\r\n")] = '\0';
+		if(line[0] == '#' || line[0] == '\0')
+			continue;
+
+		while(count < VECTOR_COLUMNS) {
+			columns[count++] = p;
+			p = strchr(p, '\t');
+			if(!p)
+				break;
+			*p++ = '\0';
+		}
+		SPRIG_CHECK("vector row has 7 tab-separated columns", count == VECTOR_COLUMNS);
+		if(count != VECTOR_COLUMNS)
+			continue;
+
+		vectorRowTypedef row = {columns[0], columns[1], columns[2], columns[3], columns[4], columns[5], columns[6]};
+		rows++;
+		if(strcmp(row.expect, "decoded") == 0)
+			decodedRows++;
+		testVectorRow(&row);
+	}
+	fclose(file);
+
+	printf("  vector file: %d rows, %d decoded\n", rows, decodedRows);
+	SPRIG_CHECK("vector file has decoded rows", decodedRows > 0);
+}
 
 static void testCrc(void) {
 	const uint8_t check[] = "123456789";
 	SPRIG_CHECK("CRC-8/SAE-J1850 check value 0x4B", libSprigCanCrc8(check, 9) == 0x4B);
-}
-
-static void testStateVectors(void) {
-	uint8_t frame[8];
-	libSprigCanStateFrameTypedef s;
-
-	s = (libSprigCanStateFrameTypedef){SPRIG_STATE_ENERGIZED, SPRIG_RELAY_DISCHARGE | SPRIG_RELAY_DISCHARGE_NEGATIVE,
-		SPRIG_PERM_DISCHARGE_ALLOWED | SPRIG_PERM_IN_SOA | SPRIG_PERM_DTI_WATCH_HEALTHY | SPRIG_PERM_CAN_REQUEST | SPRIG_PERM_HW_REQUEST, 0, 0, SPRIG_OPEN_NONE};
-	libSprigCanPackState(&s, 5, frame);
-	expectFrame("500 ENERGIZED counter 5", frame, (const uint8_t[]){0x03, 0x0A, 0x9D, 0x00, 0x00, 0x00, 0x15, 0x30});
-
-	s = (libSprigCanStateFrameTypedef){SPRIG_STATE_PRECHARGE_FAILED, 0,
-		SPRIG_PERM_DISCHARGE_ALLOWED | SPRIG_PERM_IN_SOA | SPRIG_PERM_DTI_WATCH_HEALTHY | SPRIG_PERM_CAN_REQUEST | SPRIG_PERM_HW_REQUEST, 0, SPRIG_FAULT_B_PRECHARGE_TIMEOUT, SPRIG_OPEN_PRECHARGE_FAILURE};
-	libSprigCanPackState(&s, 6, frame);
-	expectFrame("500 PRECHARGE_FAILED counter 6", frame, (const uint8_t[]){0x06, 0x00, 0x9D, 0x00, 0x01, 0x04, 0x16, 0x07});
-
-	s = (libSprigCanStateFrameTypedef){SPRIG_STATE_ENERGIZED, SPRIG_RELAY_DISCHARGE | SPRIG_RELAY_DISCHARGE_NEGATIVE,
-		SPRIG_PERM_DISCHARGE_ALLOWED | SPRIG_PERM_IN_SOA | SPRIG_PERM_DTI_WATCH_HEALTHY | SPRIG_PERM_CAN_REQUEST, 0, SPRIG_FAULT_B_REQUEST_DISAGREEMENT, SPRIG_OPEN_NONE};
-	libSprigCanPackState(&s, 7, frame);
-	expectFrame("500 ENERGIZED disagreement counter 7", frame, (const uint8_t[]){0x03, 0x0A, 0x1D, 0x00, 0x40, 0x00, 0x17, 0x49});
-
-	s = (libSprigCanStateFrameTypedef){SPRIG_STATE_STANDBY, 0,
-		SPRIG_PERM_DISCHARGE_ALLOWED | SPRIG_PERM_IN_SOA | SPRIG_PERM_DTI_WATCH_HEALTHY | SPRIG_PERM_CAN_REQUEST | SPRIG_PERM_HW_REQUEST, 0, SPRIG_FAULT_B_HVIL_OPEN, SPRIG_OPEN_NONE};
-	libSprigCanPackState(&s, 8, frame);
-	expectFrame("500 STANDBY HVIL open counter 8", frame, (const uint8_t[]){0x01, 0x00, 0x9D, 0x00, 0x20, 0x00, 0x18, 0xBD});
-}
-
-static void testPackVectors(void) {
-	uint8_t frame[8];
-	libSprigCanPackFrameTypedef p;
-
-	p = (libSprigCanPackFrameTypedef){deci(388.4f), deciSigned(52.3f), deci(386.9f)};
-	libSprigCanPackPack(&p, 9, frame);
-	expectFrame("501 388.4 V +52.3 A bus 386.9 V counter 9", frame, (const uint8_t[]){0x0F, 0x2C, 0x02, 0x0B, 0x0F, 0x1D, 0x19, 0x77});
-
-	p = (libSprigCanPackFrameTypedef){deci(390.1f), deciSigned(-12.5f), deci(NAN)};
-	libSprigCanPackPack(&p, 10, frame);
-	expectFrame("501 390.1 V -12.5 A bus unavailable counter 10", frame, (const uint8_t[]){0x0F, 0x3D, 0xFF, 0x83, 0xFF, 0xFF, 0x1A, 0xD6});
-}
-
-static void testOtherVectors(void) {
-	uint8_t frame[8];
-
-	libSprigCanLimitsFrameTypedef l = {deci(150.0f), deci(30.0f), (uint16_t)libSprigCanScale(76.25f, 100.0f, 0, 10000, 0)};
-	libSprigCanPackLimits(&l, 0, frame);
-	expectFrame("502 150 A / 30 A / SoC 76.25 % counter 0", frame, (const uint8_t[]){0x05, 0xDC, 0x01, 0x2C, 0x1D, 0xC9, 0x10, 0x66});
-
-	libSprigCanCellsFrameTypedef c = {(uint16_t)libSprigCanScale(3.712f, 1000.0f, 0, 0xFFFF, 0), (uint16_t)libSprigCanScale(3.741f, 1000.0f, 0, 0xFFFF, 0), 17, 42};
-	libSprigCanPackCells(&c, 15, frame);
-	expectFrame("503 3.712 V @17 / 3.741 V @42 counter 15", frame, (const uint8_t[]){0x0E, 0x80, 0x0E, 0x9D, 0x11, 0x2A, 0x1F, 0xCF});
-
-	libSprigCanTempsFrameTypedef t = {deciSigned(31.4f), deciSigned(28.9f), (int8_t)libSprigCanScale(41.0f, 1.0f, -128, 127, 0)};
-	libSprigCanPackTemps(&t, 3, frame);
-	expectFrame("504 31.4 / 28.9 / 41 C counter 3", frame, (const uint8_t[]){0x01, 0x3A, 0x01, 0x21, 0x29, 0xFF, 0x13, 0xB3});
-
-	t = (libSprigCanTempsFrameTypedef){deciSigned(-5.2f), deciSigned(-7.0f), (int8_t)libSprigCanScale(-10.0f, 1.0f, -128, 127, 0)};
-	libSprigCanPackTemps(&t, 4, frame);
-	expectFrame("504 -5.2 / -7.0 / -10 C counter 4", frame, (const uint8_t[]){0xFF, 0xCC, 0xFF, 0xBA, 0xF6, 0xFF, 0x14, 0x80});
 }
 
 static void testNegativeCases(void) {
@@ -148,11 +277,11 @@ static void testDti(void) {
 		libSprigDtiDecode(SPRIG_DTI_FORMAT_EXTENDED, 0x22, 1, 0x2022, true, 8, general1, &out) == SPRIG_DTI_DECODED && out.inputVoltageVolt == 390);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+	const char *vectorsPath = (argc > 1) ? argv[1] : "tests/sprig/vectors/sprig-bms-can-v1-vectors.tsv";
+
 	testCrc();
-	testStateVectors();
-	testPackVectors();
-	testOtherVectors();
+	testVectorFile(vectorsPath);
 	testNegativeCases();
 	testDti();
 	return sprigTestSummary("test_sprig_can");

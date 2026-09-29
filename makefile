@@ -192,7 +192,8 @@ test:
 	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_can.c Libraries/Src/libSprigCan.c -lm -o $(HOST_TEST_DIR)/test_sprig_can
 	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_relay.c Modules/Src/modSprigRelay.c Libraries/Src/libSprigCan.c -lm -o $(HOST_TEST_DIR)/test_sprig_relay
 	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_protection.c Modules/Src/modSprigProtection.c Libraries/Src/libSprigOcv.c -lm -o $(HOST_TEST_DIR)/test_sprig_protection
-	$(HOST_TEST_DIR)/test_sprig_can
+	cd tests/sprig/vectors && sha256sum -c sprig-bms-can-v1-vectors.tsv.sha256
+	$(HOST_TEST_DIR)/test_sprig_can tests/sprig/vectors/sprig-bms-can-v1-vectors.tsv
 	$(HOST_TEST_DIR)/test_sprig_relay
 	$(HOST_TEST_DIR)/test_sprig_protection
 
