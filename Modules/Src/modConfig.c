@@ -321,11 +321,11 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->noOfParallelModules                       	= 1;                     		// Number of parallel modules
 	configLocation->batteryCapacity					= 22.00f;				// XXAh battery
 	configLocation->cellHardUnderVoltage				= 3.00f;				// Worst case X.XXV as lowest cell voltage (Sprig D8: pack 3.0 V/cell min)
-	configLocation->cellHardOverVoltage				= 3.70f;				// Worst case X.XXV as highest cell voltage (Sprig D13: imbalance margin above the 3.59 V target)
+	configLocation->cellHardOverVoltage				= 4.20f;				// Worst case X.XXV as highest cell voltage (Sprig: MaxAmps maximum; at 99S the 400 V pack limit trips first)
 	configLocation->cellLCSoftUnderVoltage				= 3.50f;				// Lowest cell voltage X.XXV. (Sprig D8)
-	configLocation->cellSoftOverVoltage				= 3.59f;				// Normal highest cell voltage X.XXV. (Sprig D8: charge target)
+	configLocation->cellSoftOverVoltage				= 4.00f;				// Normal highest cell voltage X.XXV. (Sprig: charge target, 99S x 4.00 V = 396 V)
 	configLocation->cellBalanceDifferenceThreshold                 	= 0.01f;				// Start balancing @ XmV difference, stop if below.
-	configLocation->cellBalanceStart				= 3.55f;				// Start balancing above X.XXV. (Sprig: below the 3.59 V charge target)
+	configLocation->cellBalanceStart				= 3.95f;				// Start balancing above X.XXV. (Sprig: below the 4.00 V charge target)
 	configLocation->cellBalanceAllTime				= false;				// Enable balancing under all opstate
 	configLocation->cellThrottleUpperStart				= 0.03f;				// Upper range of cell voltage for charge throttling.
 	configLocation->cellThrottleLowerStart				= 0.20f;				// Lower range of cell voltage for discharge throttling.

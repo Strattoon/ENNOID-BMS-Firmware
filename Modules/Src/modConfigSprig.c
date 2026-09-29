@@ -35,7 +35,7 @@ void modConfigLoadSprigDefaults(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->dischargeTripDelayMs     = 1000;
 	configLocation->chargeTripCurrent        = 26.0f;                    // The pack's 5 C maximum charge (D14)
 	configLocation->chargeTripDelayMs        = 1000;
-	configLocation->packHardOverVoltage      = MODCONFIG_SPRIG_MAX_PACK_VOLTAGE;  // Master-HV operating limit (D13)
+	configLocation->packHardOverVoltage      = MODCONFIG_SPRIG_DEFAULT_PACK_HARD_OVER;  // Standard ESCs; raise only when every HV part is rated (D13)
 	configLocation->sprigConfigMagic         = MODCONFIG_SPRIG_MAGIC;
 }
 
@@ -104,7 +104,7 @@ bool modConfigSprigValid(const modConfigGeneralConfigStructTypedef *configLocati
 	if(configLocation->chargeTripDelayMs == 0)
 		return false;
 
-	// The pack-total limit keeps the pack below the Master-HV 400 V operating limit (D13).
+	// The pack-total limit may not exceed the Master-HV design rating (D13, operator: 1000 V).
 	if(!modConfigSprigInRange(configLocation->packHardOverVoltage, 1.0f, MODCONFIG_SPRIG_MAX_PACK_VOLTAGE))
 		return false;
 

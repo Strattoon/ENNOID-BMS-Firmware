@@ -7,9 +7,9 @@
 #include "modSprigProtection.h"
 #include "libSprigOcv.h"
 
-// Spec "Configuration defaults" (110S, 5200 mAh string).
+// Configuration defaults: 9 x MaxAmps 5200 11S in series (99S), 400 V pack limit.
 static const modSprigProtectionConfigTypedef config = {
-	.cellHardOverVoltage     = 3.70f,
+	.cellHardOverVoltage     = 4.20f,
 	.packHardOverVoltage     = 400.0f,
 	.cellHardUnderVoltage    = 3.00f,
 	.cellSoftUnderVoltage    = 3.50f,
@@ -28,8 +28,8 @@ static const modSprigProtectionConfigTypedef config = {
 
 static modSprigProtectionInputsTypedef nominal(uint32_t nowMs) {
 	modSprigProtectionInputsTypedef in = {
-		.nowMs = nowMs, .cellsKnown = true, .cellVoltageHigh = 3.60f, .cellVoltageLow = 3.58f,
-		.packKnown = true, .packVoltage = 395.0f, .packCurrent = 0.0f,
+		.nowMs = nowMs, .cellsKnown = true, .cellVoltageHigh = 4.01f, .cellVoltageLow = 3.99f,
+		.packKnown = true, .packVoltage = 396.0f, .packCurrent = 0.0f,
 		.tempBatteryHigh = 25.0f, .tempBatteryLow = 22.0f, .tempBMSHigh = 30.0f,
 		.cellMonitorFault = false, .currentSensorFault = false,
 	};
@@ -104,7 +104,7 @@ static void testOverVoltage(void) {
 	modSprigProtectionResultTypedef r;
 
 	modSprigProtectionInit(&state);
-	in = nominal(0); in.packVoltage = 401.0f;                                      // Cells still below 3.70 V
+	in = nominal(0); in.packVoltage = 401.0f;                                      // Cells still below 4.20 V
 	r = modSprigProtectionEvaluate(&state, &config, &in);
 	SPRIG_CHECK("pack 401 V: not yet (delay)", !r.trip);
 	in.nowMs = 600;
@@ -118,17 +118,17 @@ static void testOverVoltage(void) {
 	SPRIG_CHECK("pack 399.9 V: no trip", !r.trip);
 
 	modSprigProtectionInit(&state);
-	in = nominal(0); in.cellVoltageHigh = 3.71f;
+	in = nominal(0); in.cellVoltageHigh = 4.21f;
 	r = modSprigProtectionEvaluate(&state, &config, &in);
 	in.nowMs = 600;
 	r = modSprigProtectionEvaluate(&state, &config, &in);
-	SPRIG_CHECK("one cell at 3.71 V held: cell OV trips, bit 0", r.trip && (r.faultsA & SPRIG_FAULT_A_CELL_OVER_VOLTAGE));
+	SPRIG_CHECK("one cell at 4.21 V (above MaxAmps max) held: cell OV trips, bit 0", r.trip && (r.faultsA & SPRIG_FAULT_A_CELL_OVER_VOLTAGE));
 
 	modSprigProtectionInit(&state);
-	in = nominal(0); in.cellVoltageHigh = 3.64f;                                    // The old 3.636 V limit would have tripped
+	in = nominal(0); in.cellVoltageHigh = 4.15f;                                    // Imbalanced cell above the 4.00 V target
 	in.nowMs = 10000;
 	r = modSprigProtectionEvaluate(&state, &config, &in);
-	SPRIG_CHECK("cell at 3.64 V (imbalance margin): no trip", !r.trip);
+	SPRIG_CHECK("cell at 4.15 V (imbalance margin): no trip", !r.trip);
 
 	modSprigProtectionInit(&state);
 	in = nominal(0); in.packVoltage = 450.0f; in.packKnown = false; in.currentSensorFault = true;
@@ -198,9 +198,9 @@ static void testOcv(void) {
 	SPRIG_CHECK("OCV 3.00 V (MaxAmps minimum) -> 0 %", libSprigOcvStateOfCharge(3.00f) == 0.0f);
 	SPRIG_CHECK("OCV 2.90 V -> 0 %", libSprigOcvStateOfCharge(2.90f) == 0.0f);
 	SPRIG_CHECK("OCV NaN -> 0 %", libSprigOcvStateOfCharge(NAN) == 0.0f);
-	float storage = libSprigOcvStateOfCharge(3.59f);
-	printf("  note: 3.59 V/cell resting reads %.1f %% (MaxAmps end points, generic LiPo shape)\n", (double)storage);
-	SPRIG_CHECK("OCV 3.59 V (charge target) is not assumed full", storage < 10.0f);
+	float target = libSprigOcvStateOfCharge(4.00f);
+	printf("  note: 4.00 V/cell resting (99S charge target) reads %.1f %% (MaxAmps end points, generic LiPo shape)\n", (double)target);
+	SPRIG_CHECK("OCV 4.00 V (99S charge target) reads between 75 % and 85 %", target > 75.0f && target < 85.0f);
 }
 
 int main(void) {

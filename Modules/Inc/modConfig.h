@@ -155,7 +155,11 @@ typedef struct {
 } modConfigGeneralConfigStructTypedef;
 
 #define MODCONFIG_SPRIG_MAGIC              0x53505232u  // "SPR2": bump whenever the Sprig fields change
-#define MODCONFIG_SPRIG_MAX_PACK_VOLTAGE   400.0f       // Master-HV operating limit (spec D8)
+// ENNOID Gen 1 Master-HV: "designed to monitor up to 1000VDC" but "not tested above 400V" (ennoid.me/bms/gen-1).
+// The operator accepts the 1000 V design rating as the configuration ceiling; the pack's own limit is
+// packHardOverVoltage, which defaults to 400 V while the MGM ESCs are 400 V parts.
+#define MODCONFIG_SPRIG_MAX_PACK_VOLTAGE          1000.0f  // Master-HV design limit: highest packHardOverVoltage accepted
+#define MODCONFIG_SPRIG_DEFAULT_PACK_HARD_OVER    400.0f   // Default pack ceiling: standard MGM ESCs and ENNOID's tested range
 
 typedef enum {
 	dtiEnableOutputNone = 0,
