@@ -8,7 +8,6 @@
 #include "libSprigCan.h"
 #include "modCAN.h"
 #include "modDelay.h"
-#include "driverHWSwitches.h"
 #include <math.h>
 
 typedef struct {
