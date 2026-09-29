@@ -9,7 +9,7 @@
 
 // Configuration defaults: 9 x MaxAmps 5200 11S in series (99S), 400 V pack limit.
 static const modSprigProtectionConfigTypedef config = {
-	.cellHardOverVoltage     = 4.15f,                                                  // D15
+	.cellHardOverVoltage     = 4.20f,                                                  // D13/D15: MaxAmps maximum
 	.packHardOverVoltage     = 400.0f,
 	.cellHardUnderVoltage    = 3.00f,
 	.cellSoftUnderVoltage    = 3.50f,
@@ -104,7 +104,7 @@ static void testOverVoltage(void) {
 	modSprigProtectionResultTypedef r;
 
 	modSprigProtectionInit(&state);
-	in = nominal(0); in.packVoltage = 401.0f;                                      // Cells still below 4.15 V
+	in = nominal(0); in.packVoltage = 401.0f;                                      // Cells still below 4.20 V
 	r = modSprigProtectionEvaluate(&state, &config, &in);
 	SPRIG_CHECK("pack 401 V: not yet (delay)", !r.trip);
 	in.nowMs = 600;
@@ -118,17 +118,17 @@ static void testOverVoltage(void) {
 	SPRIG_CHECK("pack 399.9 V: no trip", !r.trip);
 
 	modSprigProtectionInit(&state);
-	in = nominal(0); in.cellVoltageHigh = 4.16f;
+	in = nominal(0); in.cellVoltageHigh = 4.21f;
 	r = modSprigProtectionEvaluate(&state, &config, &in);
 	in.nowMs = 600;
 	r = modSprigProtectionEvaluate(&state, &config, &in);
-	SPRIG_CHECK("one cell at 4.16 V held: cell OV trips, bit 0", r.trip && (r.faultsA & SPRIG_FAULT_A_CELL_OVER_VOLTAGE));
+	SPRIG_CHECK("one cell at 4.21 V held: cell OV trips, bit 0", r.trip && (r.faultsA & SPRIG_FAULT_A_CELL_OVER_VOLTAGE));
 
 	modSprigProtectionInit(&state);
-	in = nominal(0); in.cellVoltageHigh = 4.14f;                                    // Imbalanced cell above the 4.00 V target
+	in = nominal(0); in.cellVoltageHigh = 4.19f;                                    // Imbalanced cell above the 4.00 V target
 	in.nowMs = 10000;
 	r = modSprigProtectionEvaluate(&state, &config, &in);
-	SPRIG_CHECK("cell at 4.14 V (imbalance margin): no trip", !r.trip);
+	SPRIG_CHECK("cell at 4.19 V (imbalance margin): no trip", !r.trip);
 
 	modSprigProtectionInit(&state);
 	in = nominal(0); in.packVoltage = 450.0f; in.packKnown = false; in.currentSensorFault = true;

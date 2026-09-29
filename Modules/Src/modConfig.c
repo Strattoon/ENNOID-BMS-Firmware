@@ -321,7 +321,7 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->noOfParallelModules                       	= 1;                     		// Number of parallel modules
 	configLocation->batteryCapacity					= 5.20f;				// XXAh battery (MaxAmps 5200 mAh, 1P)
 	configLocation->cellHardUnderVoltage				= 3.00f;				// Worst case X.XXV as lowest cell voltage (Sprig D8: pack 3.0 V/cell min)
-	configLocation->cellHardOverVoltage				= 4.15f;				// Worst case X.XXV as highest cell voltage (Sprig D15: below the MaxAmps 4.20 V maximum)
+	configLocation->cellHardOverVoltage				= 4.20f;				// Worst case X.XXV as highest cell voltage (Sprig D13/D15: MaxAmps maximum; the 400 V pack limit trips first)
 	configLocation->cellLCSoftUnderVoltage				= 3.50f;				// Lowest cell voltage X.XXV. (Sprig D8)
 	configLocation->cellSoftOverVoltage				= 4.00f;				// Normal highest cell voltage X.XXV. (Sprig: charge target, 99S x 4.00 V = 396 V)
 	configLocation->cellBalanceDifferenceThreshold                 	= 0.01f;				// Start balancing @ XmV difference, stop if below.
