@@ -126,9 +126,43 @@ typedef struct {
 	uint32_t	NTCTopResistor[modConfigNoOfNTCTypes];                               // NTC Pullup resistor value
 	uint32_t	NTC25DegResistance[modConfigNoOfNTCTypes];                           // NTC resistance at 25 degree
 	uint16_t	NTCBetaFactor[modConfigNoOfNTCTypes];                                // NTC Beta factor
-	uint8_t		humidityICType;	
+	uint8_t		humidityICType;
 	uint8_t		BMSApplication;																													// Humidity sensor IC type
+	// Sprig BMS CAN protocol v1 (Sprig-Flight-Director docs/architecture/sprig-bms-can-v1.md)
+	uint8_t		sprigCanEnabled;                                                     // Sprig protocol, DTI relay path and hold policy instead of the stock behaviour
+	uint8_t		dtiIdFormat;                                                         // libSprigDtiFormatTypedef; SPRIG_DTI_FORMAT_UNSET until configured (no default)
+	uint8_t		dtiNodeId;                                                           // DTI node; SPRIG_DTI_NODE_UNSET until configured (no default)
+	uint8_t		dtiRelayRequestOutput;                                               // DTI digital output 1-4 that carries the relay request
+	uint8_t		inputExpanderAddress;                                                // PCAL6416 7-bit I2C address on I2C1: 0x20 or 0x21
+	uint8_t		relayRequestInput;                                                   // Expander channel (port*8 + pin) hardwired to the DTI digital output
+	uint8_t		hvilInput;                                                           // Expander channel for the HVIL loop
+	uint8_t		dtiEnableOutput;                                                     // modConfigDtiEnableOutputTypedef: 12 V output wired to the DTI inverter enable
+	uint8_t		canOpenChargerEnabled;                                               // Ground charging only: CANopen charger node 0x0A
+	uint8_t		configRevision;                                                      // Incremented on every stored configuration change
+	uint32_t	relayRequestDebounceMs;                                              // CAN and hardwired request may differ this long before faults_b bit 6
+	uint32_t	dtiWatchTimeoutMs;                                                   // DTI packets 0x20, 0x22 and 0x24 must be fresher than this
+	uint32_t	prechargeTimeoutMs;                                                  // Precharge must complete within this time
+	float		prechargeMatchFraction;                                              // Load voltage must reach this fraction of the pack voltage
+	float		prechargeCrossCheckVolts;                                            // DTI 0x20 input voltage must agree with the load voltage within this
+	float		maxDischargeCurrent;                                                 // BMS_LIMITS discharge maximum, scaled by the discharge throttle (0 = unset)
+	float		maxChargeCurrent;                                                    // BMS_LIMITS charge maximum and charge over-current trip (0 = unset)
+	float		dischargeTripCurrent;                                                // Discharge over-current trip threshold (0 = unset, no default)
+	uint32_t	dischargeTripDelayMs;                                                // Current must stay above the threshold this long (0 = unset, no default)
+	uint32_t	sprigConfigMagic;                                                    // MODCONFIG_SPRIG_MAGIC once the fields above have been initialised
 } modConfigGeneralConfigStructTypedef;
+
+#define MODCONFIG_SPRIG_MAGIC              0x53505231u  // "SPR1"
+#define MODCONFIG_SPRIG_MAX_PACK_VOLTAGE   400.0f       // Master-HV operating limit (spec D8)
+
+typedef enum {
+	dtiEnableOutputNone = 0,
+	dtiEnableOutputCooling                                                         // Master-HV Cooling output (PB2) gives up its cooling function
+} modConfigDtiEnableOutputTypedef;
+
+// Build with SPRIG_FLIGHT_BUILD=1 to force the Sprig protocol on and the ground-only paths off.
+#ifndef SPRIG_FLIGHT_BUILD
+#define SPRIG_FLIGHT_BUILD 0
+#endif
 
 modConfigGeneralConfigStructTypedef* modConfigInit(void);
 bool modConfigStoreAndLoadDefaultConfig(void);
@@ -137,5 +171,8 @@ bool modConfigLoadConfig(void);
 bool modConfigStoreDefaultConfig(void);
 void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocation);
 void modconfigHardwareLimitsApply(modConfigGeneralConfigStructTypedef *configLocation);
+void modConfigLoadSprigDefaults(modConfigGeneralConfigStructTypedef *configLocation);
+void modConfigSprigApply(modConfigGeneralConfigStructTypedef *configLocation);
+bool modConfigSprigValid(const modConfigGeneralConfigStructTypedef *configLocation);
 
 #endif

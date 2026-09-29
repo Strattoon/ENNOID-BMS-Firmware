@@ -27,8 +27,11 @@ uint32_t               modCANSendStatusFastLastTisk;
 uint32_t               modCANSendStatusSlowLastTisk;
 uint32_t               modCANSendStatusVESCLastTisk;
 uint32_t               modCANSafetyCANMessageTimeout;
-uint32_t               modCANLastRXID;
-uint32_t               modCANLastRXDifferLastTick;
+volatile uint32_t      modCANLastRXTick;                // Any received frame, standard or extended
+static CanTxMsgTypeDef modCANTxQueue[TX_CAN_QUEUE_SIZE];
+static uint8_t         modCANTxQueueRead;
+static uint8_t         modCANTxQueueWrite;
+uint32_t               modCANTxDroppedCount;
 static uint8_t         modCANRxBuffer[RX_CAN_BUFFER_SIZE];
 static uint8_t         modCANRxBufferLastID;
 static CanRxMsgTypeDef modCANRxFrames[RX_CAN_FRAMES_SIZE];
@@ -46,6 +49,9 @@ ChargerStateTypedef chargerOpStateNew = opInit;
 
 modPowerElectronicsPackStateTypedef *modCANPackStateHandle;
 modConfigGeneralConfigStructTypedef *modCANGeneralConfigHandle;
+
+static void modCANSendPacketWrapper(unsigned char *data, unsigned int len);
+static bool modCANConfigChannelOpen(void);
 
 // Private variables
 static can_status_msg stat_msgs[CAN_STATUS_MSGS_TO_STORE];
@@ -150,6 +156,7 @@ void modCANInit(modPowerElectronicsPackStateTypedef *packState, modConfigGeneral
 	modCANSendStatusVESCLastTisk = HAL_GetTick();
 	modCANSafetyCANMessageTimeout = HAL_GetTick();
 	modCANErrorLastTick = HAL_GetTick();
+	modCANLastRXTick = HAL_GetTick();
 }
 
 void modCANTask(void){		
@@ -161,7 +168,8 @@ void modCANTask(void){
 		modCANErrorLastTick = HAL_GetTick();
 	}
 	
-	if(modCANGeneralConfigHandle->emitStatusOverCAN) {
+	// Both legacy protocols use extended IDs that collide with DTI extended-mode packets.
+	if(modCANGeneralConfigHandle->emitStatusOverCAN && !modSprigEnabled()) {
 		if(modCANGeneralConfigHandle->emitStatusProtocol == canEmitProtocolDieBieEngineering) {
 			// Send status messages with interval
 			if(modDelayTick1ms(&modCANSendStatusFastLastTisk,200))                        // 5 Hz
@@ -183,8 +191,14 @@ void modCANTask(void){
 	modCANSubTaskHandleCommunication();
 	modCANRXWatchDog();
 	
-	// Control the charger
-	modCANHandleSubTaskCharger();
+	// Control the charger: ground charging only, behind a config flag that flight builds force off.
+	if(modCANGeneralConfigHandle->canOpenChargerEnabled)
+		modCANHandleSubTaskCharger();
+	
+	// Sprig BMS CAN v1: inputs, faults and the 0x500-0x50F frames
+	modSprigTask();
+	
+	modCANTxPump();
 }
 
 uint32_t modCANGetDestinationID(CanRxMsgTypeDef canMsg) {
@@ -393,16 +407,21 @@ void CAN_RX0_IRQHandler(void) {
 }
 
 void HAL_CAN_RxCpltCallback(CAN_HandleTypeDef *CanHandle) {
+	CanRxMsgTypeDef *rxMsg = CanHandle->pRxMsg;
+	
+	modCANLastRXTick = HAL_GetTick();
+	
 	// Handle CAN message	
-	if((*CanHandle->pRxMsg).IDE == CAN_ID_STD) {         // Standard ID
-		modCANHandleCANOpenMessage(*CanHandle->pRxMsg);
+	if(rxMsg->IDE == CAN_ID_STD) {                       // Standard ID
+		modSprigCANReceive(rxMsg->StdId, false, rxMsg->DLC, rxMsg->Data);
+		if(modCANGeneralConfigHandle->canOpenChargerEnabled)
+			modCANHandleCANOpenMessage(*rxMsg);
 	}else{                                               // Extended ID
-		if((*CanHandle->pRxMsg).ExtId == 0x0A23){
-			modCANHandleKeepAliveSafetyMessage(*CanHandle->pRxMsg);
-		}else{
-			uint8_t destinationID = modCANGetDestinationID(*CanHandle->pRxMsg);
+		modSprigCANReceive(rxMsg->ExtId, true, rxMsg->DLC, rxMsg->Data);
+		if(modCANConfigChannelOpen()) {
+			uint8_t destinationID = modCANGetDestinationID(*rxMsg);
 			if(destinationID == modCANGeneralConfigHandle->CANID){
-				modCANRxFrames[modCANRxFrameWrite++] = *CanHandle->pRxMsg;
+				modCANRxFrames[modCANRxFrameWrite++] = *rxMsg;
 				if(modCANRxFrameWrite >= RX_CAN_FRAMES_SIZE) {
 					modCANRxFrameWrite = 0;
 				}
@@ -411,6 +430,11 @@ void HAL_CAN_RxCpltCallback(CAN_HandleTypeDef *CanHandle) {
 	}
 	
   HAL_CAN_Receive_IT(&modCANHandle, CAN_FIFO0);
+}
+
+// The configuration and firmware-update channel (and PING) is only open in MAINTENANCE in Sprig mode.
+static bool modCANConfigChannelOpen(void) {
+	return !modSprigEnabled() || modSprigMaintenance();
 }
 
 void modCANSubTaskHandleCommunication(void) {
@@ -424,7 +448,7 @@ void modCANSubTaskHandleCommunication(void) {
 	while(modCANRxFrameRead != modCANRxFrameWrite) {
 		CanRxMsgTypeDef rxmsg = modCANRxFrames[modCANRxFrameRead++];
 
-		if(rxmsg.IDE == CAN_ID_EXT) {
+		if(rxmsg.IDE == CAN_ID_EXT && modCANConfigChannelOpen()) {
 			uint8_t destinationID = modCANGetDestinationID(rxmsg);
 			CAN_PACKET_ID cmd = modCANGetPacketID(rxmsg);
 
@@ -478,6 +502,7 @@ void modCANSubTaskHandleCommunication(void) {
 							modCommandsSetSendFunction(modCANSendPacketWrapper);
 							modCommandsProcessPacket(rxmsg.Data + ind, rxmsg.DLC - ind);
 						}
+						break;
 
 					case CAN_PACKET_PING: {
 						uint8_t buffer[2];
@@ -663,28 +688,85 @@ void modCANSubTaskHandleCommunication(void) {
 	}
 }
 
-void modCANTransmitExtID(uint32_t id, uint8_t *data, uint8_t len) {
-	CanTxMsgTypeDef txmsg;
-	txmsg.IDE = CAN_ID_EXT;
-	txmsg.ExtId = id;
-	txmsg.RTR = CAN_RTR_DATA;
-	txmsg.DLC = len;
-	memcpy(txmsg.Data, data, len);
+// Transmit is non-blocking: frames are queued and moved into free hardware mailboxes by modCANTxPump().
+static void modCANEnqueue(uint32_t ide, uint32_t id, uint8_t *data, uint8_t len) {
+	uint8_t next = (uint8_t)((modCANTxQueueWrite + 1) % TX_CAN_QUEUE_SIZE);
+	CanTxMsgTypeDef *txmsg;
 	
-	modCANHandle.pTxMsg = &txmsg;
-	HAL_CAN_Transmit(&modCANHandle,1);
+	if(len > 8)
+		len = 8;
+	
+	if(next == modCANTxQueueRead) {
+		modCANTxDroppedCount++;                                                        // Queue full: drop the newest frame
+		return;
+	}
+	
+	txmsg = &modCANTxQueue[modCANTxQueueWrite];
+	txmsg->IDE   = ide;
+	txmsg->StdId = (ide == CAN_ID_STD) ? id : 0;
+	txmsg->ExtId = (ide == CAN_ID_EXT) ? id : 0;
+	txmsg->RTR   = CAN_RTR_DATA;
+	txmsg->DLC   = len;
+	memcpy(txmsg->Data, data, len);
+	modCANTxQueueWrite = next;
+	
+	modCANTxPump();
+}
+
+static bool modCANTxMailboxWrite(const CanTxMsgTypeDef *txmsg) {
+	CAN_TxMailBox_TypeDef *mailbox;
+	uint32_t tsr = modCANHandle.Instance->TSR;
+	
+	if(tsr & CAN_TSR_TME0)
+		mailbox = &modCANHandle.Instance->sTxMailBox[0];
+	else if(tsr & CAN_TSR_TME1)
+		mailbox = &modCANHandle.Instance->sTxMailBox[1];
+	else if(tsr & CAN_TSR_TME2)
+		mailbox = &modCANHandle.Instance->sTxMailBox[2];
+	else
+		return false;                                                                  // All three busy: try again next pump
+	
+	if(txmsg->IDE == CAN_ID_STD)
+		mailbox->TIR = (txmsg->StdId << 21);
+	else
+		mailbox->TIR = (txmsg->ExtId << 3) | CAN_TI0R_IDE;
+	mailbox->TDTR = (mailbox->TDTR & ~CAN_TDT0R_DLC) | (txmsg->DLC & CAN_TDT0R_DLC);
+	mailbox->TDLR = ((uint32_t)txmsg->Data[3] << 24) | ((uint32_t)txmsg->Data[2] << 16) | ((uint32_t)txmsg->Data[1] << 8) | txmsg->Data[0];
+	mailbox->TDHR = ((uint32_t)txmsg->Data[7] << 24) | ((uint32_t)txmsg->Data[6] << 16) | ((uint32_t)txmsg->Data[5] << 8) | txmsg->Data[4];
+	mailbox->TIR |= CAN_TI0R_TXRQ;
+	
+	return true;
+}
+
+void modCANTxPump(void) {
+	while(modCANTxQueueRead != modCANTxQueueWrite) {
+		if(!modCANTxMailboxWrite(&modCANTxQueue[modCANTxQueueRead]))
+			break;
+		modCANTxQueueRead = (uint8_t)((modCANTxQueueRead + 1) % TX_CAN_QUEUE_SIZE);
+	}
+}
+
+void modCANTransmitExtID(uint32_t id, uint8_t *data, uint8_t len) {
+	modCANEnqueue(CAN_ID_EXT, id & 0x1FFFFFFF, data, len);
+}
+
+// Configuration channel only (MAINTENANCE, relays open): a reply can be longer than the queue, so let the
+// mailboxes drain for up to CAN_TX_SPACE_WAIT_MS instead of dropping frames. Flight traffic never waits.
+static void modCANTxWaitForSpace(void) {
+	uint32_t start = HAL_GetTick();
+	
+	while((uint8_t)((modCANTxQueueWrite + 1) % TX_CAN_QUEUE_SIZE) == modCANTxQueueRead) {
+		modCANTxPump();
+		if((uint32_t)(HAL_GetTick() - start) >= CAN_TX_SPACE_WAIT_MS)
+			break;
+	}
 }
 
 void modCANTransmitStandardID(uint32_t id, uint8_t *data, uint8_t len) {
-	CanTxMsgTypeDef txmsg;
-	txmsg.IDE = CAN_ID_STD;
-	txmsg.StdId = id;
-	txmsg.RTR = CAN_RTR_DATA;
-	txmsg.DLC = len;
-	memcpy(txmsg.Data, data, len);
-	
-	modCANHandle.pTxMsg = &txmsg;
-	HAL_CAN_Transmit(&modCANHandle,1);
+	// 0x50A is the CANopen RPDO4 COB-ID of charger node 0x0A: a charger would take it as a command.
+	if(id == SPRIG_CAN_ID_FORBIDDEN)
+		return;
+	modCANEnqueue(CAN_ID_STD, id & 0x7FF, data, len);
 }
 
 /**
@@ -714,6 +796,7 @@ void modCANSendBuffer(uint8_t controllerID, uint8_t *data, unsigned int len, boo
 		send_buffer[ind++] = send;
 		memcpy(send_buffer + ind, data, len);
 		ind += len;
+		modCANTxWaitForSpace();
 		modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_PROCESS_SHORT_BUFFER), send_buffer, ind);
 	}else{
 		unsigned int end_a = 0;
@@ -734,6 +817,7 @@ void modCANSendBuffer(uint8_t controllerID, uint8_t *data, unsigned int len, boo
 				memcpy(send_buffer + 1, data + i, send_len);
 			}
 
+			modCANTxWaitForSpace();
 			modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_FILL_RX_BUFFER), send_buffer, send_len + 1);
 		}
 
@@ -749,6 +833,7 @@ void modCANSendBuffer(uint8_t controllerID, uint8_t *data, unsigned int len, boo
 				memcpy(send_buffer + 2, data + i, send_len);
 			}
 
+			modCANTxWaitForSpace();
 			modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_FILL_RX_BUFFER_LONG), send_buffer, send_len + 2);
 		}
 
@@ -763,81 +848,13 @@ void modCANSendBuffer(uint8_t controllerID, uint8_t *data, unsigned int len, boo
     
 		// Old ID method
 		//modCANTransmitExtID(controllerID | ((uint32_t)CAN_PACKET_PROCESS_RX_BUFFER << 8), send_buffer, ind++);
+		modCANTxWaitForSpace();
 		modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_PROCESS_RX_BUFFER), send_buffer, ind++);
 	}
 }
 
-void modCANSetESCDuty(uint8_t controllerID, float duty) {
-	int32_t sendIndex = 0;
-	uint8_t buffer[4];
-	libBufferAppend_int32(buffer, (int32_t)(duty * 100000.0f), &sendIndex);
-	modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_SET_DUTY), buffer, sendIndex);
-}
-
-void modCANSetESCCurrent(uint8_t controllerID, float current) {
-	int32_t sendIndex = 0;
-	uint8_t buffer[4];
-	libBufferAppend_int32(buffer, (int32_t)(current * 1000.0f), &sendIndex);
-	modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_SET_CURRENT), buffer, sendIndex);
-}
-
-void modCANSetESCBrakeCurrent(uint8_t controllerID, float current) {
-	int32_t sendIndex = 0;
-	uint8_t buffer[4];
-	libBufferAppend_int32(buffer, (int32_t)(current * 1000.0f), &sendIndex);
-	modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_SET_CURRENT_BRAKE), buffer, sendIndex);
-}
-
-void modCANSetESCRPM(uint8_t controllerID, float rpm) {
-	int32_t sendIndex = 0;
-	uint8_t buffer[4];
-	libBufferAppend_int32(buffer, (int32_t)rpm, &sendIndex);
-	modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_SET_RPM), buffer, sendIndex);
-}
-
-void modCANSetESCPosition(uint8_t controllerID, float pos) {
-	int32_t sendIndex = 0;
-	uint8_t buffer[4];
-	libBufferAppend_int32(buffer, (int32_t)(pos * 1000000.0f), &sendIndex);
-	modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_SET_POS), buffer, sendIndex);
-}
-
-void modCANSetESCCurrentRelative(uint8_t controllerID, float currentRel) {
-	int32_t sendIndex = 0;
-	uint8_t buffer[4];
-	libBufferAppend_float32(buffer, currentRel, 1e5, &sendIndex);
-	modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_SET_CURRENT_REL), buffer, sendIndex);
-}
-
-void modCANSetESCBrakeCurrentRelative(uint8_t controllerID, float currentRel) {
-	int32_t sendIndex = 0;
-	uint8_t buffer[4];
-	libBufferAppend_float32(buffer, currentRel, 1e5, &sendIndex);
-	modCANTransmitExtID(modCANGetCANID(controllerID,CAN_PACKET_SET_CURRENT_BRAKE_REL), buffer, sendIndex);
-}
-
 static void modCANSendPacketWrapper(unsigned char *data, unsigned int length) {
 	modCANSendBuffer(modCANRxBufferLastID, data, length, true);
-}
-
-void modCANHandleKeepAliveSafetyMessage(CanRxMsgTypeDef canMsg) {
-	if(canMsg.DLC >= 1){
-		if(canMsg.Data[0] & 0x01){
-			modCANSafetyCANMessageTimeout = HAL_GetTick();
-			modCANPackStateHandle->safetyOverCANHCSafeNSafe = (canMsg.Data[0] & 0x02) ? true : false;
-		}
-		
-		if(canMsg.Data[0] & 0x04){
-				modCANPackStateHandle->watchDogTime = (canMsg.Data[0] & 0x08) ? 255 : 0;
-		}
-	}
-	
-	if(canMsg.DLC >= 2){
-		if(canMsg.Data[1] & 0x10){
-			modCANPackStateHandle->chargeBalanceActive = modCANGeneralConfigHandle->allowChargingDuringDischarge;
-			modPowerElectronicsResetBalanceModeActiveTimeout();
-		}
-	}
 }
 
 void modCANHandleCANOpenMessage(CanRxMsgTypeDef canMsg) {
@@ -905,13 +922,16 @@ void modCANHandleSubTaskCharger(void) {
 	}
 }
 
+// Re-initialise the CAN peripheral only when nothing at all has been received for a second and the
+// controller reports error-passive or bus-off. Standard frames count as traffic (upstream only watched
+// ExtId, so an all-standard bus reset CAN every second).
 void modCANRXWatchDog(void){
-  if(modCANHandle.pRxMsg->ExtId != modCANLastRXID){
-	  modCANLastRXID = modCANHandle.pRxMsg->ExtId;
-		modCANLastRXDifferLastTick = HAL_GetTick();
-	}
+	uint32_t lastRX = modCANLastRXTick;
 	
-	if(modDelayTick1ms(&modCANLastRXDifferLastTick,1000)){
+	if((uint32_t)(HAL_GetTick() - lastRX) < CAN_RX_WATCHDOG_MS)
+		return;
+	
+	if(modCANHandle.Instance->ESR & (CAN_ESR_EPVF | CAN_ESR_BOFF)) {
 		modCANInit(modCANPackStateHandle,modCANGeneralConfigHandle);
 	}
 }
@@ -953,9 +973,6 @@ void modCANOpenChargerSetCurrentVoltageReady(float current,float voltage,bool re
 	modCANTransmitStandardID(0x040A, buffer, sendIndex);
 }
 
-uint16_t modCANGetVESCCurrent(void){
-	//return stat_tmp->current;
-}
 
 
 

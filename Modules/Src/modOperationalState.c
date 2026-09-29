@@ -44,6 +44,72 @@ uint32_t modOperationalStatePSPDisableDelay;
 uint32_t modOperationalStateWatchDogCountdownLastTick;
 bool modOperationalStateForceOn;
 
+// Sprig: the relay supervisor owns the relays unless the BMS was forced on (which bypasses protections).
+static bool modOperationalStateSprigOwnsRelays(void) {
+	return modOperationalStateGeneralConfigHandle->sprigCanEnabled && !modOperationalStateForceOn;
+}
+
+// Where a normal start goes: upstream precharges straight away, Sprig waits in STANDBY for the DTI request.
+static OperationalStateTypedef modOperationalStateNormalStart(void) {
+	return modOperationalStateSprigOwnsRelays() ? OP_STATE_STANDBY : OP_STATE_PRE_CHARGE;
+}
+
+static void modOperationalStateFillLoadDisplayData(void) {
+	modOperationalStateDisplayData.StateOfCharge = modOperationalStateGeneralStateOfCharge->generalStateOfCharge;
+	modOperationalStateDisplayData.Current = fabs(modOperationalStatePackStatehandle->packCurrent);
+	modOperationalStateDisplayData.PackVoltage = fabs(modOperationalStatePackStatehandle->packVoltage);
+	modOperationalStateDisplayData.HighestTemp = fabs(modOperationalStatePackStatehandle->tempBatteryHigh);
+	modOperationalStateDisplayData.AverageTemp = fabs(modOperationalStatePackStatehandle->tempBatteryAverage);
+	modOperationalStateDisplayData.LowestTemp = fabs(modOperationalStatePackStatehandle->tempBatteryLow);
+	modOperationalStateDisplayData.Humidity = fabs(modOperationalStatePackStatehandle->humidity);
+	modOperationalStateDisplayData.LowestCellVoltage = fabs(modOperationalStatePackStatehandle->cellVoltageLow);
+	modOperationalStateDisplayData.HighestCellVoltage = fabs(modOperationalStatePackStatehandle->cellVoltageHigh);
+	modOperationalStateDisplayData.DisplayStyle = modOperationalStateGeneralConfigHandle->displayStyle;
+}
+
+// Sprig: STANDBY, PRE_CHARGE, LOAD_ENABLED and ERROR_PRECHARGE follow the relay supervisor (spec "Sequence"
+// and "Hold policy"). The upstream exits from LOAD_ENABLED (not-used timeout, charger detect, load voltage
+// below the precharge fraction) are deliberately absent: in flight they would open the backup battery.
+static void modOperationalStateSprigTask(void) {
+	modSprigRelayPhaseTypedef phase;
+	
+	if(!modOperationalStateGeneralConfigHandle->sprigCanEnabled) {
+		// Sprig was switched off from the terminal (relays open only): stay open until the next power cycle.
+		modPowerElectronicsDisableAll();
+		modOperationalStateSetNewState(OP_STATE_STANDBY);
+		modOperationalStateUpdateStates();
+		modDisplayShowInfo(DISP_MODE_EXTERNAL,modOperationalStateDisplayData);
+		return;
+	}
+	
+	phase = modSprigRelayTask();
+	switch(phase) {
+		case SPRIG_PHASE_PRECHARGING:
+			modOperationalStateSetNewState(OP_STATE_PRE_CHARGE);
+			break;
+		case SPRIG_PHASE_ENERGIZED:
+			modOperationalStateSetNewState(OP_STATE_LOAD_ENABLED);
+			break;
+		case SPRIG_PHASE_PRECHARGE_FAILED:
+			modOperationalStateSetNewState(OP_STATE_ERROR_PRECHARGE);
+			break;
+		case SPRIG_PHASE_STANDBY:
+		default:
+			modOperationalStateSetNewState(OP_STATE_STANDBY);
+			break;
+	}
+	modOperationalStateUpdateStates();
+	
+	if(phase == SPRIG_PHASE_PRECHARGE_FAILED) {
+		modEffectChangeState(STAT_LED_POWER,STAT_FLASH_FAST);
+		modDisplayShowInfo(DISP_MODE_ERROR_PRECHARGE,modOperationalStateDisplayData);
+	}else{
+		modEffectChangeState(STAT_LED_POWER,STAT_SET);
+		modOperationalStateFillLoadDisplayData();
+		modDisplayShowInfo(DISP_MODE_LOAD,modOperationalStateDisplayData);
+	}
+}
+
 void modOperationalStateInit(modPowerElectronicsPackStateTypedef *packState, modConfigGeneralConfigStructTypedef *generalConfigPointer, modStateOfChargeStructTypeDef *generalStateOfCharge) {
 	modOperationalStatePackStatehandle = packState;
 	modOperationalStateGeneralConfigHandle = generalConfigPointer;
@@ -74,17 +140,17 @@ void modOperationalStateTask(void) {
 						break;
 					case opStateChargingModeNormal:
 					default:					
-						modOperationalStateSetNewState(OP_STATE_PRE_CHARGE);							// Prepare to goto operational state
+						modOperationalStateSetNewState(modOperationalStateNormalStart());	// Prepare to goto operational state
 						modEffectChangeState(STAT_LED_POWER,STAT_SET);										// Turn LED on in normal operation
 						break;
 				}
 			}else if(modPowerStateButtonPressedOnTurnon()) {												// Check if button was pressen on turn-on
-				modOperationalStateSetNewState(OP_STATE_PRE_CHARGE);									// Prepare to goto operational state
+				modOperationalStateSetNewState(modOperationalStateNormalStart());				// Prepare to goto operational state
 				modEffectChangeState(STAT_LED_POWER,STAT_SET);												// Turn LED on in normal operation
 			}else if(modOperationalStateNewState == OP_STATE_INIT){								  // USB or CAN origin of turn-on
 				switch(modOperationalStateGeneralConfigHandle->externalEnableOperationalState){
 					case opStateExtNormal:
-						modOperationalStateSetNewState(OP_STATE_PRE_CHARGE);							// Prepare to goto normal operational state
+						modOperationalStateSetNewState(modOperationalStateNormalStart());	// Prepare to goto normal operational state
 						break;
 					case opStateExternal:
 					default:
@@ -95,7 +161,8 @@ void modOperationalStateTask(void) {
 			}
 			
 			if(modDelayTick1ms(&modOperationalStateStartupDelay,modOperationalStateGeneralConfigHandle->displayTimeoutSplashScreen)) {// Wait for a bit than update state. Also check voltage after main fuse? followed by going to error state if blown?		
-				if(!modOperationalStatePackStatehandle->disChargeLCAllowed && !modPowerStateChargerDetected()) {						// If discharge is not allowed
+				bool cellSensingFault = modOperationalStateSprigOwnsRelays() && modOperationalStatePackStatehandle->cellMonitorCommFault;	// Sprig D10: hold, do not power down
+				if(!modOperationalStatePackStatehandle->disChargeLCAllowed && !modPowerStateChargerDetected() && !cellSensingFault) {		// If discharge is not allowed
 					modOperationalStateSetNewState(OP_STATE_ERROR);							// Then the battery is dead
 					modOperationalStateBatteryDeadDisplayTime = HAL_GetTick();
 				}
@@ -145,7 +212,14 @@ void modOperationalStateTask(void) {
 			modOperationalStateDisplayData.HighestCellVoltage = fabs(modOperationalStatePackStatehandle->cellVoltageHigh);
 			modDisplayShowInfo(DISP_MODE_CHARGE,modOperationalStateDisplayData);
 			break;
+		case OP_STATE_STANDBY:
+			modOperationalStateSprigTask();
+			break;
 		case OP_STATE_PRE_CHARGE:
+			if(modOperationalStateSprigOwnsRelays()) {
+				modOperationalStateSprigTask();
+				break;
+			}
 			// in case of timeout: disable pre charge & go to error state
 			if(modOperationalStateLastState != modOperationalStateCurrentState) { 	  // If discharge is not allowed pre-charge will not be enabled, therefore reset timeout every task call. Also reset on first entry
 				modOperationalStatePreChargeTimeout = HAL_GetTick();										// Reset timeout
@@ -178,6 +252,10 @@ void modOperationalStateTask(void) {
 			modOperationalStateUpdateStates();
 			break;
 		case OP_STATE_LOAD_ENABLED:
+			if(modOperationalStateSprigOwnsRelays()) {
+				modOperationalStateSprigTask();
+				break;
+			}
 			if(modPowerElectronicsSetDisCharge(true)) {
 				
 				if(modOperationalStateGeneralConfigHandle->LCUsePrecharge==forced){
@@ -325,6 +403,10 @@ void modOperationalStateTask(void) {
 
 			break;
 		case OP_STATE_ERROR_PRECHARGE:
+			if(modOperationalStateSprigOwnsRelays()) {
+				modOperationalStateSprigTask();                                       // Latched without powering down (spec PRECHARGE_FAILED)
+				break;
+			}
 			// Go to save state and in the future -> try to handle error situation
 			if(modOperationalStateLastState != modOperationalStateCurrentState)
 				modOperationalStateErrorDisplayTime = HAL_GetTick();
@@ -452,6 +534,7 @@ void modOperationalStateTask(void) {
 		modOperationalStatePackStatehandle->powerDownDesired = true;
 		
 		if(modOperationalStateDelayedDisable(modOperationalStateGeneralConfigHandle->useCANDelayedPowerDown)) {
+			modSprigRelaysForcedOpen(SPRIG_OPEN_POWER_BUTTON);
 			modOperationalStateSetNewFaultState(FAULT_CODE_CAN_DELAYED_POWER_DOWN);
 			modOperationalStateSetNewState(OP_STATE_POWER_DOWN);
 			modDisplayShowInfo(DISP_MODE_POWEROFF,modOperationalStateDisplayData);
@@ -463,6 +546,7 @@ void modOperationalStateTask(void) {
 	// In case of extreme cellvoltages or temperatures goto error state
 	if((modOperationalStatePackStatehandle->packOperationalCellState == PACK_STATE_ERROR_HARD_CELLVOLTAGE || modOperationalStatePackStatehandle->packOperationalCellState == PACK_STATE_ERROR_TEMPERATURE) && (modOperationalStatePackStatehandle->packOperationalCellState != packOperationalCellStateLastErrorState) && !modOperationalStateForceOn){
 		packOperationalCellStateLastErrorState = modOperationalStatePackStatehandle->packOperationalCellState; // Meganism to make error situation only trigger once
+		modSprigRelaysForcedOpen(SPRIG_OPEN_PROTECTION);
 		modOperationalStateSetNewState(OP_STATE_ERROR);
 		modOperationalStateUpdateStates();		
 	}
@@ -471,6 +555,7 @@ void modOperationalStateTask(void) {
 	if((modOperationalStatePackStatehandle->packOperationalCellState == PACK_STATE_ERROR_OVER_CURRENT) && (modOperationalStatePackStatehandle->packOperationalCellState != packOperationalCellStateLastErrorState)){
 		packOperationalCellStateLastErrorState = modOperationalStatePackStatehandle->packOperationalCellState; // Meganism to make error situation only trigger once
 		modOperationalStatePackStatehandle->faultState = FAULT_CODE_OVER_CURRENT;
+		modSprigRelaysForcedOpen(SPRIG_OPEN_PROTECTION);
 		modOperationalStateSetNewState(OP_STATE_ERROR);	
 		modOperationalStateUpdateStates();
 	}

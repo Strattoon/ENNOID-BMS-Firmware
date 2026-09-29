@@ -97,6 +97,9 @@ void modTerminalProcessString(char *str) {
 			case OP_STATE_EXTERNAL:
 				modCommandsPrintf("Operational state     : %s","External (USB or CAN)");
 				break;
+			case OP_STATE_STANDBY:
+				modCommandsPrintf("Operational state     : %s","Standby (Sprig, relays open)");
+				break;
 			default:
 				modCommandsPrintf("Operational state     : %s","Unknown");
 				break;

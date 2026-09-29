@@ -176,7 +176,9 @@ bool driverSWLTC6804ReadCellVoltagesArray(float cellVoltagesArray[][driverSWLTC6
 	bool dataValid = true;
 	uint16_t cellVoltageArrayCodes[driverSWLTC6804TotalNumberOfICs][driverSWLTC6804MaxNoOfCellPerModule]; 
 	
-	driverSWLTC6804ReadCellVoltageRegisters(CELL_CH_ALL,driverSWLTC6804TotalNumberOfICs,cellVoltageArrayCodes);
+	// A PEC error means the codes cannot be trusted: keep the last good values and report the read invalid.
+	if(driverSWLTC6804ReadCellVoltageRegisters(CELL_CH_ALL,driverSWLTC6804TotalNumberOfICs,cellVoltageArrayCodes) != 0)
+		return false;
 	
   for(uint8_t modulePointer = 0; modulePointer < driverSWLTC6804TotalNumberOfICs; modulePointer++) {
 		for(uint8_t cellPointer = 0; cellPointer < driverSWLTC6804MaxNoOfCellPerModule; cellPointer++){
@@ -426,7 +428,9 @@ bool driverSWLTC6804ReadAuxVoltagesArray(float auxVoltagesArray[][driverSWLTC680
 	bool dataValid = true;
 	uint16_t auxVoltageArrayCodes[driverSWLTC6804TotalNumberOfICs][driverSWLTC6804MaxNoOfTempSensorPerModule]; 
 	
-	driverSWLTC6804ReadAuxVoltageRegisters(AUX_CH_ALL,driverSWLTC6804TotalNumberOfICs,auxVoltageArrayCodes);
+	// A PEC error means the codes cannot be trusted: keep the last good values and report the read invalid.
+	if(driverSWLTC6804ReadAuxVoltageRegisters(AUX_CH_ALL,driverSWLTC6804TotalNumberOfICs,auxVoltageArrayCodes) != 0)
+		return false;
 	
   for(uint8_t modulePointer = 0; modulePointer < driverSWLTC6804TotalNumberOfICs; modulePointer++) {
 		for(uint8_t auxPointer = 0; auxPointer < driverSWLTC6804MaxNoOfTempSensorPerModule; auxPointer++){

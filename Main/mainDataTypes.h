@@ -619,6 +619,7 @@ typedef enum {
 	OP_STATE_BALANCING,		// 9
 	OP_STATE_CHARGED,		// 10
 	OP_STATE_FORCEON,		// 11
+	OP_STATE_STANDBY,		// 12, Sprig: relays open, waiting for the DTI relay request
 } OperationalStateTypedef;
 
 typedef enum {

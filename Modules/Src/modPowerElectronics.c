@@ -57,6 +57,14 @@ uint32_t chargeIncreaseIntervalTime;
 
 uint16_t  calculatedChargeThrottle = 0;
 float currentOffset = 0.0f;
+
+// Sprig sensing faults (D10) and discharge over-current trip (D8)
+uint8_t  modPowerElectronicsCellMonitorFailCount;
+bool     modPowerElectronicsCellDataValid;                                                  // At least one PEC-clean cell voltage read
+uint8_t  modPowerElectronicsCurrentSensorFailCount;
+bool     modPowerElectronicsCurrentSensorSampleOk;
+bool     modPowerElectronicsDischargeTripTiming;
+uint32_t modPowerElectronicsDischargeTripStartTick;
 //float currentOffsetTemp = 0.0f;
 uint8_t currentOffsetCounter = 0;
 
@@ -126,6 +134,15 @@ void modPowerElectronicsInit(modPowerElectronicsPackStateTypedef *packState, mod
 	modPowerElectronicsPackStateHandle->buzzerOn					= false;
 	modPowerElectronicsPackStateHandle->powerDownDesired				= false;
 	modPowerElectronicsPackStateHandle->powerOnLongButtonPress			= false;
+	modPowerElectronicsPackStateHandle->dtiEnableDesired				= false;
+	modPowerElectronicsPackStateHandle->cellMonitorCommFault			= false;
+	modPowerElectronicsPackStateHandle->currentSensorFault				= false;
+	modPowerElectronicsPackStateHandle->dischargeOverCurrentTrip			= false;
+	modPowerElectronicsPackStateHandle->chargeOverCurrentTrip			= false;
+	modPowerElectronicsCellMonitorFailCount						= 0;
+	modPowerElectronicsCellDataValid						= false;
+	modPowerElectronicsCurrentSensorFailCount					= 0;
+	modPowerElectronicsDischargeTripTiming						= false;
 	
 	// init the cell module variables empty
 	for( uint8_t modulePointer = 0; modulePointer < NoOfCellMonitorsPossibleOnBMS; modulePointer++) {
@@ -195,6 +212,9 @@ bool modPowerElectronicsTask(void) {
 		if(modPowerElectronicsPackStateHandle->packVoltage >= (modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsGeneralConfigHandle->cellHardOverVoltage)) {
 			modPowerElectronicsVoltageSenseError = true;
 		}
+		// Sprig faults_a bit 7: pack-voltage sense error or repeated ISL28022 transfer failures (D10).
+		modPowerElectronicsPackStateHandle->currentSensorFault = modPowerElectronicsVoltageSenseError ||
+			(modPowerElectronicsCurrentSensorFailCount > modPowerElectronicsGeneralConfigHandle->maxUnderAndOverVoltageErrorCount);
 		
 		// Combine the currents based on config and calculate pack power.
 		modPowerElectronicsPackStateHandle->packCurrent = modPowerElectronicsCalcPackCurrent();
@@ -355,13 +375,33 @@ void modPowerElectronicsSetCooling(bool newState) {
 	}
 };
 
+// Sprig relay supervisor outputs. Unlike modPowerElectronicsSetDisCharge() this never inspects the load
+// voltage: under the hold policy a load-voltage dip must not open the main relay.
+void modPowerElectronicsSetSprigRelays(bool preCharge, bool disCharge, bool dtiEnable) {
+	bool preChargeDesired = preCharge && modPowerElectronicsGeneralConfigHandle->LCUsePrecharge >= 1;
+	bool disChargeDesired = disCharge && modPowerElectronicsGeneralConfigHandle->LCUseDischarge == 1;
+	
+	if(modPowerElectronicsPackStateHandle->preChargeDesired == preChargeDesired &&
+	   modPowerElectronicsPackStateHandle->disChargeDesired == disChargeDesired &&
+	   modPowerElectronicsPackStateHandle->dtiEnableDesired == dtiEnable &&
+	   !modPowerElectronicsPackStateHandle->chargeDesired)
+		return;
+	
+	modPowerElectronicsPackStateHandle->preChargeDesired = preChargeDesired;
+	modPowerElectronicsPackStateHandle->disChargeDesired = disChargeDesired;
+	modPowerElectronicsPackStateHandle->dtiEnableDesired = dtiEnable;
+	modPowerElectronicsPackStateHandle->chargeDesired    = false;                           // The main relay carries the generator's charge current
+	modPowerElectronicsUpdateSwitches();
+}
+
 void modPowerElectronicsDisableAll(void) {
-	if(modPowerElectronicsPackStateHandle->disChargeDesired | modPowerElectronicsPackStateHandle->preChargeDesired | modPowerElectronicsPackStateHandle->chargeDesired) {
+	if(modPowerElectronicsPackStateHandle->disChargeDesired | modPowerElectronicsPackStateHandle->preChargeDesired | modPowerElectronicsPackStateHandle->chargeDesired | modPowerElectronicsPackStateHandle->dtiEnableDesired) {
 		modPowerElectronicsPackStateHandle->disChargeDesired = false;
 		modPowerElectronicsPackStateHandle->preChargeDesired = false;
 		modPowerElectronicsPackStateHandle->chargeDesired = false;
 		modPowerElectronicsPackStateHandle->chargePFETDesired = false;
 		modPowerElectronicsPackStateHandle->coolingDesired = false;
+		modPowerElectronicsPackStateHandle->dtiEnableDesired = false;
 		driverHWSwitchesDisableAll();
 	}
 };
@@ -518,7 +558,13 @@ void modPowerElectronicsSubTaskVoltageWatch(void) {
 	}
 	
 	// Handle hard cell voltage limits
-	if(modPowerElectronicsVoltageSenseError || modPowerElectronicsPackStateHandle->cellVoltageHigh > modPowerElectronicsGeneralConfigHandle-> cellHardOverVoltage || modPowerElectronicsPackStateHandle->cellVoltageLow < modPowerElectronicsGeneralConfigHandle-> cellHardUnderVoltage || (modPowerElectronicsPackStateHandle->packVoltage > modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsGeneralConfigHandle->cellHardOverVoltage)) {
+	// In Sprig mode a pack-voltage sensing error is faults_a bit 7: it holds and blocks the next close (D10).
+	// Likewise a cell-monitor fault (faults_a bit 6) leaves the cell limits blind rather than tripping them on
+	// stale or never-read (0 V) values.
+	bool packVoltageSenseTrip = !modPowerElectronicsGeneralConfigHandle->sprigCanEnabled && (modPowerElectronicsVoltageSenseError || (modPowerElectronicsPackStateHandle->packVoltage > modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsGeneralConfigHandle->cellHardOverVoltage));
+	bool cellVoltagesKnown = !modPowerElectronicsGeneralConfigHandle->sprigCanEnabled || (modPowerElectronicsCellDataValid && !modPowerElectronicsPackStateHandle->cellMonitorCommFault);
+	bool cellHardLimitTrip = cellVoltagesKnown && (modPowerElectronicsPackStateHandle->cellVoltageHigh > modPowerElectronicsGeneralConfigHandle-> cellHardOverVoltage || modPowerElectronicsPackStateHandle->cellVoltageLow < modPowerElectronicsGeneralConfigHandle-> cellHardUnderVoltage);
+	if(packVoltageSenseTrip || cellHardLimitTrip) {
 		if(modPowerElectronicsUnderAndOverVoltageErrorCount++ > modPowerElectronicsGeneralConfigHandle->maxUnderAndOverVoltageErrorCount){
 			modPowerElectronicsPackStateHandle->packOperationalCellState = PACK_STATE_ERROR_HARD_CELLVOLTAGE;
 			modPowerElectronicsPackStateHandle->faultState = FAULT_CODE_MAX_UVP_OVP_ERRORS;
@@ -547,12 +593,44 @@ void modPowerElectronicsSubTaskVoltageWatch(void) {
 	}
 };
 
+static void modPowerElectronicsOverCurrentTrip(void) {
+	modPowerElectronicsPackStateHandle->packOperationalCellState = PACK_STATE_ERROR_OVER_CURRENT;
+	modPowerElectronicsPackStateHandle->disChargeLCAllowed = false;
+	modPowerElectronicsPackStateHandle->chargeAllowed = false;
+}
+
 void 	modPowerElectronicsSubTaskCurrentWatch(void){
+	// ENNOID packCurrent is positive while charging (see modStateOfChargeProcess).
+	if(!modPowerElectronicsGeneralConfigHandle->sprigCanEnabled) {
 		// Handle over current limits 
-	if(modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->maxAllowedCurrent){
-			modPowerElectronicsPackStateHandle->packOperationalCellState = PACK_STATE_ERROR_OVER_CURRENT;
-			modPowerElectronicsPackStateHandle->disChargeLCAllowed = false;
-			modPowerElectronicsPackStateHandle->chargeAllowed = false;
+		if(modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->maxAllowedCurrent)
+			modPowerElectronicsOverCurrentTrip();
+		return;
+	}
+	
+	// A current-sensor fault means the current is unknown: hold (D10).
+	if(modPowerElectronicsPackStateHandle->currentSensorFault) {
+		modPowerElectronicsDischargeTripTiming = false;
+		return;
+	}
+	
+	// Charge over-current (faults_a bit 3): the generator must not push more than maxChargeCurrent into the pack (D8).
+	if(modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->maxChargeCurrent) {
+		modPowerElectronicsPackStateHandle->chargeOverCurrentTrip = true;
+		modPowerElectronicsOverCurrentTrip();
+	}
+	
+	// Discharge over-current (faults_a bit 2): above dischargeTripCurrent for longer than dischargeTripDelayMs (D8).
+	if(-modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->dischargeTripCurrent) {
+		if(!modPowerElectronicsDischargeTripTiming) {
+			modPowerElectronicsDischargeTripTiming = true;
+			modPowerElectronicsDischargeTripStartTick = HAL_GetTick();
+		}else if((uint32_t)(HAL_GetTick() - modPowerElectronicsDischargeTripStartTick) >= modPowerElectronicsGeneralConfigHandle->dischargeTripDelayMs) {
+			modPowerElectronicsPackStateHandle->dischargeOverCurrentTrip = true;
+			modPowerElectronicsOverCurrentTrip();
+		}
+	}else{
+		modPowerElectronicsDischargeTripTiming = false;
 	}
 };
 
@@ -590,7 +668,14 @@ void modPowerElectronicsUpdateSwitches(void) {
 	};
 	//Handle cooling output
 	#else
-	if(modPowerElectronicsPackStateHandle->coolingDesired && modPowerElectronicsPackStateHandle->coolingAllowed)
+	if(modPowerElectronicsGeneralConfigHandle->sprigCanEnabled && modPowerElectronicsGeneralConfigHandle->dtiEnableOutput == dtiEnableOutputCooling) {
+		// DTI inverter enable (spec D4): "main closed and precharge complete", driven only in ENERGIZED.
+		bool mainClosed = modPowerElectronicsPackStateHandle->disChargeDesired && (modPowerElectronicsPackStateHandle->disChargeLCAllowed || modPowerElectronicsAllowForcedOnState);
+		if(modPowerElectronicsPackStateHandle->dtiEnableDesired && mainClosed && !modPowerElectronicsPackStateHandle->preChargeDesired)
+			driverHWSwitchesSetSwitchState(SWITCH_COOLING,(driverHWSwitchesStateTypedef)SWITCH_SET);
+		else
+			driverHWSwitchesSetSwitchState(SWITCH_COOLING,(driverHWSwitchesStateTypedef)SWITCH_RESET);
+	}else if(modPowerElectronicsPackStateHandle->coolingDesired && modPowerElectronicsPackStateHandle->coolingAllowed)
 		driverHWSwitchesSetSwitchState(SWITCH_COOLING,(driverHWSwitchesStateTypedef)SWITCH_SET);
 	else
 		driverHWSwitchesSetSwitchState(SWITCH_COOLING,(driverHWSwitchesStateTypedef)SWITCH_RESET);
@@ -873,7 +958,8 @@ void modPowerElectronicsCheckPackSOA(void) {
 	bool outsideLimitsDischarge = false;
 	bool outsideLimitsCharge    = false;	
 	
-	outsideLimitsBMS |= (modPowerElectronicsVinErrorCount >= VinErrorThreshold) ? true : false;
+	if(!modPowerElectronicsGeneralConfigHandle->sprigCanEnabled)                                // Sprig: faults_a bit 7, holds (D10)
+		outsideLimitsBMS |= (modPowerElectronicsVinErrorCount >= VinErrorThreshold) ? true : false;
 	
 	// Check BMS Limits
 	if(modPowerElectronicsGeneralConfigHandle->tempEnableMaskBMS) {
@@ -973,7 +1059,13 @@ void modPowerElectronicsCellMonitorsCheckConfigAndReadAnalogData(void){
 			// TODO: Implement
 			
 			// Read cell voltages
-			driverSWLTC6804ReadCellVoltagesArray(modPowerElectronicsPackStateHandle->cellModuleVoltages);
+			if(driverSWLTC6804ReadCellVoltagesArray(modPowerElectronicsPackStateHandle->cellModuleVoltages)) {
+				modPowerElectronicsCellMonitorFailCount = 0;
+				modPowerElectronicsCellDataValid = true;
+			}
+			else if(modPowerElectronicsCellMonitorFailCount < 0xFF)
+				modPowerElectronicsCellMonitorFailCount++;                                           // PEC failure: the last good values are kept
+			modPowerElectronicsPackStateHandle->cellMonitorCommFault = modPowerElectronicsCellMonitorFailCount > modPowerElectronicsGeneralConfigHandle->maxUnderAndOverVoltageErrorCount;
 			modPowerElectronicsCellMonitorsArrayTranslate();
 			
 				
@@ -1245,8 +1337,9 @@ void modPowerElectronicsTerminalCellConnectionTest(int argc, const char **argv) 
 }
 
 void modPowerElectronicsSamplePackAndLCData(void) {
-	float tempPackVoltage;
+	float tempPackVoltage = modPowerElectronicsPackStateHandle->packVoltage;                 // Kept when the ISL28022 does not answer
 	
+	modPowerElectronicsCurrentSensorSampleOk = true;
 	modPowerElectronicsSamplePackVoltage(&tempPackVoltage);
 	modPowerElectronicsPackStateHandle->packVoltage = tempPackVoltage;
 	modPowerElectronicsLCSenseSample();
@@ -1268,9 +1361,15 @@ void modPowerElectronicsSamplePackVoltage(float *voltagePointer) {
 	switch(modPowerElectronicsGeneralConfigHandle->packVoltageDataSource) {
 		case sourcePackVoltageNone:
 			break;
-		case sourcePackVoltageISL28022:
-				driverSWISL28022GetBusVoltage(ISL28022_MASTER_ADDRES,ISL28022_MASTER_BUS,voltagePointer,modPowerElectronicsGeneralConfigHandle->voltageLCOffset, modPowerElectronicsGeneralConfigHandle->voltageLCFactor);
-			break;
+		case sourcePackVoltageISL28022: {
+				// The driver reports 0 V on a failed transfer; keep the last good sample instead, so a
+				// glitch cannot make "load >= fraction x pack" true during precharge.
+				float sampledVoltage;
+				if(driverSWISL28022GetBusVoltage(ISL28022_MASTER_ADDRES,ISL28022_MASTER_BUS,&sampledVoltage,modPowerElectronicsGeneralConfigHandle->voltageLCOffset, modPowerElectronicsGeneralConfigHandle->voltageLCFactor))
+					*voltagePointer = sampledVoltage;
+				else
+					modPowerElectronicsCurrentSensorSampleOk = false;
+			} break;
 		case sourcePackVoltageSumOfIndividualCellVoltages:
 			*voltagePointer = modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsPackStateHandle->cellVoltageAverage;
 			break;
@@ -1327,7 +1426,12 @@ float modPowerElectronicsCalcPackCurrent(void){
 }
 
 void modPowerElectronicsLCSenseSample(void) {
-		driverSWISL28022GetBusCurrent(ISL28022_MASTER_ADDRES,ISL28022_MASTER_BUS,&modPowerElectronicsPackStateHandle->loCurrentLoadCurrent,currentOffset, modPowerElectronicsGeneralConfigHandle->shuntLCFactor);
+		if(!driverSWISL28022GetBusCurrent(ISL28022_MASTER_ADDRES,ISL28022_MASTER_BUS,&modPowerElectronicsPackStateHandle->loCurrentLoadCurrent,currentOffset, modPowerElectronicsGeneralConfigHandle->shuntLCFactor))
+			modPowerElectronicsCurrentSensorSampleOk = false;
+		if(modPowerElectronicsCurrentSensorSampleOk)                                               // Consecutive bad ISL28022 samples
+			modPowerElectronicsCurrentSensorFailCount = 0;
+		else if(modPowerElectronicsCurrentSensorFailCount < 0xFF)
+			modPowerElectronicsCurrentSensorFailCount++;
 		driverHWADCGetLoadVoltage(&modPowerElectronicsPackStateHandle->loCurrentLoadVoltage, modPowerElectronicsGeneralConfigHandle->loadVoltageOffset, modPowerElectronicsGeneralConfigHandle->loadVoltageFactor);
 		#if (HAS_NO_DISCHARGE)
 			modPowerElectronicsPackStateHandle->loCurrentLoadVoltage = modPowerElectronicsPackStateHandle->packVoltage;

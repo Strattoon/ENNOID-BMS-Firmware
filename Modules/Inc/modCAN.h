@@ -33,6 +33,7 @@
 #include "libBuffer.h"
 #include "modPowerElectronics.h"
 #include "modConfig.h"
+#include "modSprig.h"
 #include <string.h>
 #include <math.h>
 
@@ -40,6 +41,9 @@
 #define CAN_STATUS_MSG_INT_MS			1
 #define RX_CAN_FRAMES_SIZE	    		255       // max 255
 #define RX_CAN_BUFFER_SIZE	    		PACKET_MAX_PL_LEN
+#define TX_CAN_QUEUE_SIZE	    		32        // Frames waiting for a free hardware mailbox
+#define CAN_RX_WATCHDOG_MS	    		1000
+#define CAN_TX_SPACE_WAIT_MS	    		2         // Configuration-channel replies only
 
 // Settings
 #define CAN_STATUS_MSGS_TO_STORE		10
@@ -57,15 +61,7 @@ void		modCANSubTaskHandleCommunication(void);
 void		modCANTransmitExtID(uint32_t id, uint8_t *data, uint8_t len);
 void		modCANTransmitStandardID(uint32_t id, uint8_t *data, uint8_t len);
 void		modCANSendBuffer(uint8_t controllerID, uint8_t *data, unsigned int len, bool send);
-void		modCANSetESCDuty(uint8_t controllerID, float duty);
-void		modCANSetESCCurrent(uint8_t controllerID, float current);
-void		modCANSetESCBrakeCurrent(uint8_t controllerID, float current);
-void		modCANSetESCRPM(uint8_t controllerID, float rpm);
-void		modCANSetESCPosition(uint8_t controllerID, float pos);
-void		modCANSetESCCurrentRelative(uint8_t controllerID, float currentRel);
-void		modCANSetESCBrakeCurrentRelative(uint8_t controllerID, float currentRel);
-static void	modCANSendPacketWrapper(unsigned char *data, unsigned int len);
-void		modCANHandleKeepAliveSafetyMessage(CanRxMsgTypeDef canMsg);
+void		modCANTxPump(void);
 void		modCANHandleCANOpenMessage(CanRxMsgTypeDef canMsg);
 void		modCANHandleSubTaskCharger(void);
 void		modCANRXWatchDog(void);
@@ -73,8 +69,6 @@ void		modCANOpenChargerCheckPresent(void);
 void		modCANOpenBMSSendHeartBeat(void);
 void		modCANOpenChargerStartNode(void);
 void		modCANOpenChargerSetCurrentVoltageReady(float current,float voltage,bool ready);
-
-uint16_t 	modCANGetVESCCurrent(void);
 
 can_status_msg *comm_can_get_status_msg_index(int index);
 can_status_msg *comm_can_get_status_msg_id(int id);

@@ -16,6 +16,9 @@ typedef struct {
 } I2C1PortStruct;
 
 void driverHWI2C1Init(void);
+void driverHWI2C1Recover(void);
+bool driverHWI2C1MemWrite(uint16_t DevAddress, uint8_t MemAddress, uint8_t *pData, uint16_t Size);	// True on success
+bool driverHWI2C1MemRead(uint16_t DevAddress, uint8_t MemAddress, uint8_t *pData, uint16_t Size);	// True on success
 bool driverHWI2C1Write(uint16_t DevAddress, bool readWrite, uint8_t *pData, uint16_t Size);
 bool driverHWI2C1Read(uint16_t DevAddress, uint8_t *pData, uint16_t Size);
 

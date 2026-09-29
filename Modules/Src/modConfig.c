@@ -34,10 +34,22 @@ bool modConfigStoreAndLoadDefaultConfig(void) {
 	}
 	
 	modConfigLoadConfig();
+
+	// A configuration stored before the Sprig fields existed reads back without the magic. The struct grew,
+	// so the state-of-charge record (stored right after it) moved too: re-store both from defaults.
+	if(modConfigGeneralConfig.sprigConfigMagic != MODCONFIG_SPRIG_MAGIC) {
+		modConfigLoadSprigDefaults(&modConfigGeneralConfig);
+		driverSWStorageManagerStoreStruct(&modConfigGeneralConfig,STORAGE_CONFIG);
+		driverSWStorageManagerStateOfChargeEmpty = true;
+		returnVal = true;
+	}
+	modConfigSprigApply(&modConfigGeneralConfig);
+
 	return returnVal;
 };
 
 bool modConfigStoreConfig(void) {
+	modConfigGeneralConfig.configRevision++;																		// BMS_IDENT.config_revision
 	return driverSWStorageManagerStoreStruct(&modConfigGeneralConfig,STORAGE_CONFIG);
 	// TODO_EEPROM
 };
@@ -96,6 +108,8 @@ void modconfigHardwareLimitsApply(modConfigGeneralConfigStructTypedef *configLoc
 			configLocation->lastICNoOfCells = 0;
 			configLocation->lastICMask = 0;
 		}
+
+		modConfigSprigApply(configLocation);
 }
 
 void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocation) {
@@ -306,10 +320,10 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->noOfCellsParallel                              	= 10;                      		// Number of cells in parallel
 	configLocation->noOfParallelModules                       	= 1;                     		// Number of parallel modules
 	configLocation->batteryCapacity					= 22.00f;				// XXAh battery
-	configLocation->cellHardUnderVoltage				= 2.30f;				// Worst case X.XXV as lowest cell voltage
-	configLocation->cellHardOverVoltage				= 4.20f;				// Worst case X.XXV as highest cell voltage
-	configLocation->cellLCSoftUnderVoltage				= 2.70f;				// Lowest cell voltage X.XXV.
-	configLocation->cellSoftOverVoltage				= 4.15f;				// Normal highest cell voltage X.XXV.
+	configLocation->cellHardUnderVoltage				= 3.00f;				// Worst case X.XXV as lowest cell voltage (Sprig D8: pack 3.0 V/cell min)
+	configLocation->cellHardOverVoltage				= 3.636f;				// Worst case X.XXV as highest cell voltage (Sprig D8: 110S x 3.636 V <= 400 V)
+	configLocation->cellLCSoftUnderVoltage				= 3.50f;				// Lowest cell voltage X.XXV. (Sprig D8)
+	configLocation->cellSoftOverVoltage				= 3.59f;				// Normal highest cell voltage X.XXV. (Sprig D8: charge target)
 	configLocation->cellBalanceDifferenceThreshold                 	= 0.01f;				// Start balancing @ XmV difference, stop if below.
 	configLocation->cellBalanceStart				= 4.1f;					// Start balancing above X.XXV.
 	configLocation->cellBalanceAllTime				= false;				// Enable balancing under all opstate
@@ -801,8 +815,9 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->lastICMask					= 0;
 	configLocation->humidityICType					= 2;
 	configLocation->BMSApplication					= electricVehicle;
-	
+
 #endif
 
+	modConfigLoadSprigDefaults(configLocation);
 }
 

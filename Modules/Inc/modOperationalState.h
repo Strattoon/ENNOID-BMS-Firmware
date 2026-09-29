@@ -27,6 +27,7 @@
 #include "modDisplay.h"
 #include "modConfig.h"
 #include "modStateOfCharge.h"
+#include "modSprig.h"
 #include "math.h"
 
 #ifndef MODOPERATIONALSTATE_H_

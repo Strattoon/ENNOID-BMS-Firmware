@@ -31,6 +31,7 @@
 #include "modUART.h"
 #include "mainDataTypes.h"
 #include "modCAN.h"
+#include "modSprig.h"
 
 //#include "safety_check.h"
 //#include "report_status.h"
@@ -66,6 +67,7 @@ int main(void) {
 	modCommandsInit(&packState,generalConfig);
 	modUARTInit();																	  												// Will act on UART message requests
 	modCANInit(&packState,generalConfig);																			// Will act on CAN message requests
+	modSprigInit(&packState,generalConfig);																		// Sprig BMS CAN v1: DTI watch, input expander, relay supervisor
 	modEffectInit();																													// Controls the effects on LEDs + buzzer
 	modEffectChangeState(STAT_LED_DEBUG,STAT_FLASH);													// Set Debug LED to blinking mode	
 	modPowerElectronicsInit(&packState,generalConfig);												// Will measure all voltages and store them in packState	

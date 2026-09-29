@@ -277,6 +277,29 @@ void modCommandsProcessPacket(unsigned char *data, unsigned int len) {
 			modCommandsGeneralConfig->powerDownDelay				= libBufferGet_uint32(data,&ind);		// 4
 			modCommandsGeneralConfig->humidityICType				= libBufferGet_uint8(data,&ind);		// 1
 			
+			// Sprig BMS CAN v1 fields, appended: only read when the tool sent them, so the stock tool keeps working.
+			if(len >= (unsigned int)ind + MODCOMMANDS_SPRIG_CONFIG_BYTES) {
+				modCommandsGeneralConfig->sprigCanEnabled			= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->dtiIdFormat				= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->dtiNodeId				= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->dtiRelayRequestOutput			= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->inputExpanderAddress			= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->relayRequestInput			= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->hvilInput				= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->dtiEnableOutput			= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->canOpenChargerEnabled			= libBufferGet_uint8(data,&ind);		// 1
+				modCommandsGeneralConfig->relayRequestDebounceMs		= libBufferGet_uint32(data,&ind);		// 4
+				modCommandsGeneralConfig->dtiWatchTimeoutMs			= libBufferGet_uint32(data,&ind);		// 4
+				modCommandsGeneralConfig->prechargeTimeoutMs			= libBufferGet_uint32(data,&ind);		// 4
+				modCommandsGeneralConfig->prechargeMatchFraction		= libBufferGet_float32_auto(data,&ind);		// 4
+				modCommandsGeneralConfig->prechargeCrossCheckVolts		= libBufferGet_float32_auto(data,&ind);		// 4
+				modCommandsGeneralConfig->maxDischargeCurrent			= libBufferGet_float32_auto(data,&ind);		// 4
+				modCommandsGeneralConfig->maxChargeCurrent			= libBufferGet_float32_auto(data,&ind);		// 4
+				modCommandsGeneralConfig->dischargeTripCurrent			= libBufferGet_float32_auto(data,&ind);		// 4
+				modCommandsGeneralConfig->dischargeTripDelayMs			= libBufferGet_uint32(data,&ind);		// 4
+				modCommandsGeneralConfig->sprigConfigMagic			= MODCONFIG_SPRIG_MAGIC;
+			}
+			
 			ind = 0;
 			modCommandsSendBuffer[ind++] = packet_id;
 			modCommandsSendPacket(modCommandsSendBuffer, ind);
@@ -390,6 +413,26 @@ void modCommandsProcessPacket(unsigned char *data, unsigned int len) {
 			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->chargeEnableOperationalState			,&ind); // 1	
 			libBufferAppend_uint32(       modCommandsSendBuffer,modCommandsToBeSendConfig->powerDownDelay					,&ind); // 4
 			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->humidityICType					,&ind); // 1
+			// Sprig BMS CAN v1 fields, appended after the stock layout
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->sprigCanEnabled				,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->dtiIdFormat					,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->dtiNodeId					,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->dtiRelayRequestOutput			,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->inputExpanderAddress			,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->relayRequestInput				,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->hvilInput					,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->dtiEnableOutput				,&ind); // 1
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->canOpenChargerEnabled			,&ind); // 1
+			libBufferAppend_uint32(       modCommandsSendBuffer,modCommandsToBeSendConfig->relayRequestDebounceMs			,&ind); // 4
+			libBufferAppend_uint32(       modCommandsSendBuffer,modCommandsToBeSendConfig->dtiWatchTimeoutMs				,&ind); // 4
+			libBufferAppend_uint32(       modCommandsSendBuffer,modCommandsToBeSendConfig->prechargeTimeoutMs			,&ind); // 4
+			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->prechargeMatchFraction			,&ind); // 4
+			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->prechargeCrossCheckVolts			,&ind); // 4
+			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->maxDischargeCurrent			,&ind); // 4
+			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->maxChargeCurrent				,&ind); // 4
+			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->dischargeTripCurrent			,&ind); // 4
+			libBufferAppend_uint32(       modCommandsSendBuffer,modCommandsToBeSendConfig->dischargeTripDelayMs			,&ind); // 4
+			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->configRevision				,&ind); // 1
 			
 		  	modCommandsSendPacket(modCommandsSendBuffer, ind);
 			break;

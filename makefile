@@ -14,6 +14,11 @@ SRCS += ./Modules/Src/modPowerState.c
 SRCS += ./Modules/Src/modStateOfCharge.c
 SRCS += ./Modules/Src/modTerminal.c
 SRCS += ./Modules/Src/modUART.c
+SRCS += ./Modules/Src/modConfigSprig.c
+SRCS += ./Modules/Src/modSprig.c
+SRCS += ./Modules/Src/modSprigInputs.c
+SRCS += ./Modules/Src/modSprigRelay.c
+SRCS += ./Modules/Src/modSprigTerminal.c
 
 SRCS += ./Drivers/SWDrivers/Src/driverSWStorageManager.c
 SRCS += ./Drivers/SWDrivers/Src/driverSWSSD1306.c
@@ -23,6 +28,7 @@ SRCS += ./Drivers/SWDrivers/Src/driverSWADC128D818.c
 SRCS += ./Drivers/SWDrivers/Src/driverSWUART2.c
 SRCS += ./Drivers/SWDrivers/Src/driverSWSHT21.c
 SRCS += ./Drivers/SWDrivers/Src/driverSWHTC1080.c
+SRCS += ./Drivers/SWDrivers/Src/driverSWPCAL6416.c
 
 SRCS += ./Drivers/HWDrivers/Src/driverHWADC.c
 SRCS += ./Drivers/HWDrivers/Src/driverHWEEPROM.c
@@ -64,6 +70,7 @@ SRCS += ./Libraries/Src/libGraphics.c
 SRCS += ./Libraries/Src/libPacket.c
 SRCS += ./Libraries/Src/libRingBuffer.c
 SRCS += ./Libraries/Src/libMempools.c
+SRCS += ./Libraries/Src/libSprigCan.c
 
 SRCS += ./Config/confparser.c
 SRCS += ./Config/confxml.c
@@ -100,6 +107,11 @@ CFLAGS += -ffunction-sections -fdata-sections #-fshort-enums
 # define board for compiler
 CFLAGS += -D STM32F303xC
 CFLAGS += -D USE_HAL_DRIVER
+# BMS_IDENT.firmware_build: first 8 hex digits of the firmware commit
+GIT_HASH := $(shell git rev-parse --short=8 HEAD 2>/dev/null)
+ifneq ($(GIT_HASH),)
+CFLAGS += -D SPRIG_FIRMWARE_BUILD=0x$(GIT_HASH)u
+endif
 CFLAGS += $(build_args)
 
 LINKER_FLAGS = -Wl,-Map=main.map -Wl,--gc-sections
@@ -168,6 +180,18 @@ connect:
 
 
 
+# Host unit tests for the Sprig BMS CAN v1 codec and relay supervisor (no hardware needed)
+HOST_CC ?= gcc
+HOST_TEST_DIR = tests/sprig/build
+HOST_TEST_FLAGS = -std=gnu99 -Wall -Wextra -Werror -I ./Libraries/Inc -I ./Modules/Inc -I ./tests/sprig
+
+test:
+	mkdir -p $(HOST_TEST_DIR)
+	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_can.c Libraries/Src/libSprigCan.c -lm -o $(HOST_TEST_DIR)/test_sprig_can
+	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_relay.c Modules/Src/modSprigRelay.c Libraries/Src/libSprigCan.c -lm -o $(HOST_TEST_DIR)/test_sprig_relay
+	$(HOST_TEST_DIR)/test_sprig_can
+	$(HOST_TEST_DIR)/test_sprig_relay
+
 debug:
 	arm-none-eabi-gdb --eval-command="target remote localhost:3333" main.elf
 clean:
@@ -186,3 +210,4 @@ clean:
 	-rm GCC/*.o
 	-rm Config/*.o
 	-rm Device/*.o
+	-rm -r tests/sprig/build
