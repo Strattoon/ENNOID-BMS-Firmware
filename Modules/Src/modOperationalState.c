@@ -93,6 +93,9 @@ static void modOperationalStateSprigTask(void) {
 		case SPRIG_PHASE_PRECHARGE_FAILED:
 			modOperationalStateSetNewState(OP_STATE_ERROR_PRECHARGE);
 			break;
+		case SPRIG_PHASE_FAULT:
+			modOperationalStateSetNewState(OP_STATE_ERROR);
+			break;
 		case SPRIG_PHASE_STANDBY:
 		default:
 			modOperationalStateSetNewState(OP_STATE_STANDBY);
@@ -100,7 +103,13 @@ static void modOperationalStateSprigTask(void) {
 	}
 	modOperationalStateUpdateStates();
 	
-	if(phase == SPRIG_PHASE_PRECHARGE_FAILED) {
+	if(phase == SPRIG_PHASE_FAULT) {
+		// Latched, powered and transmitting: no automatic power-down (D11).
+		modEffectChangeStateError(STAT_LED_DEBUG,STAT_ERROR,modOperationalStatePackStatehandle->faultState);
+		modEffectChangeStateError(STAT_LED_POWER,STAT_ERROR,modOperationalStatePackStatehandle->faultState);
+		modOperationalStateDisplayData.FaultCode = modOperationalStatePackStatehandle->faultState;
+		modDisplayShowInfo(DISP_MODE_ERROR,modOperationalStateDisplayData);
+	}else if(phase == SPRIG_PHASE_PRECHARGE_FAILED) {
 		modEffectChangeState(STAT_LED_POWER,STAT_FLASH_FAST);
 		modDisplayShowInfo(DISP_MODE_ERROR_PRECHARGE,modOperationalStateDisplayData);
 	}else{
@@ -161,8 +170,8 @@ void modOperationalStateTask(void) {
 			}
 			
 			if(modDelayTick1ms(&modOperationalStateStartupDelay,modOperationalStateGeneralConfigHandle->displayTimeoutSplashScreen)) {// Wait for a bit than update state. Also check voltage after main fuse? followed by going to error state if blown?		
-				bool cellSensingFault = modOperationalStateSprigOwnsRelays() && modOperationalStatePackStatehandle->cellMonitorCommFault;	// Sprig D10: hold, do not power down
-				if(!modOperationalStatePackStatehandle->disChargeLCAllowed && !modPowerStateChargerDetected() && !cellSensingFault) {		// If discharge is not allowed
+				// Sprig: a low or unreadable pack only blocks closing (D10, D12); it never powers the BMS down.
+				if(!modOperationalStatePackStatehandle->disChargeLCAllowed && !modPowerStateChargerDetected() && !modOperationalStateSprigOwnsRelays()) {		// If discharge is not allowed
 					modOperationalStateSetNewState(OP_STATE_ERROR);							// Then the battery is dead
 					modOperationalStateBatteryDeadDisplayTime = HAL_GetTick();
 				}
@@ -383,6 +392,10 @@ void modOperationalStateTask(void) {
 			
 			break;
 		case OP_STATE_ERROR:
+			if(modOperationalStateSprigOwnsRelays()) {
+				modOperationalStateSprigTask();                                       // Latched FAULT, stays powered (D11)
+				break;
+			}
 			// Go to save state and in the future -> try to handle error situation
 			if(modOperationalStateLastState != modOperationalStateCurrentState)
 				modOperationalStateErrorDisplayTime = HAL_GetTick();
@@ -560,6 +573,24 @@ void modOperationalStateTask(void) {
 		modOperationalStateUpdateStates();
 	}
 	
+	
+	// Sprig: a protection trip outside the supervisor's states (e.g. ground charging) also latches FAULT (D11).
+	if(modOperationalStateSprigOwnsRelays() && modSprigProtectionTripped()) {
+		switch(modOperationalStateCurrentState) {
+			case OP_STATE_STANDBY:
+			case OP_STATE_PRE_CHARGE:
+			case OP_STATE_LOAD_ENABLED:
+			case OP_STATE_ERROR_PRECHARGE:
+			case OP_STATE_ERROR:
+			case OP_STATE_POWER_DOWN:
+				break;                                                                // Handled by the supervisor or already powering off
+			default:
+				modPowerElectronicsDisableAll();
+				modOperationalStateSetNewState(OP_STATE_ERROR);
+				modOperationalStateUpdateStates();
+				break;
+		}
+	}
 	
 	// Move the button pressed state to the status struct
 	modOperationalStatePackStatehandle->powerOnLongButtonPress = modPowerStateGetLongButtonPressState(); 

@@ -9,10 +9,12 @@
 	  the DTI 0x20 input voltage agrees within prechargeCrossCheckVolts.
 	  PRECHARGING -> PRECHARGE_FAILED on prechargeTimeoutMs (latched).
 
-	Hold policy (spec "Hold policy"): once ENERGIZED only the BMS protections or
-	an agreed request withdrawal open the relays here. The power button and hard
-	protection errors are handled by the operational state machine, which calls
-	modSprigRelayForceOpen(). Every other problem only latches a faults_b bit.
+	Hold policy (spec "Hold policy"): once ENERGIZED only a protection trip
+	(faults_a bits 0, 2, 3, 4 -> FAULT, latched until power-off) or an agreed
+	request withdrawal open the relays here. The power button is handled by the
+	operational state machine, which calls modSprigRelayForceOpen(). Low-side
+	conditions only block closing (D12); every other problem only latches a
+	faults_b bit.
  */
 
 #include "modSprigRelay.h"
@@ -37,7 +39,7 @@ void modSprigRelayInit(modSprigRelayStateTypedef *state) {
 void modSprigRelayForceOpen(modSprigRelayStateTypedef *state, sprigCanOpenReasonTypedef reason) {
 	if(state->phase == SPRIG_PHASE_PRECHARGING || state->phase == SPRIG_PHASE_ENERGIZED)
 		state->lastOpenReason = (uint8_t)reason;
-	if(state->phase != SPRIG_PHASE_PRECHARGE_FAILED)
+	if(state->phase != SPRIG_PHASE_PRECHARGE_FAILED && state->phase != SPRIG_PHASE_FAULT)
 		state->phase = SPRIG_PHASE_STANDBY;
 }
 
@@ -85,7 +87,7 @@ static bool modSprigRelayBothWithdrawn(const modSprigRelayInputsTypedef *in) {
 static bool modSprigRelayCloseBlocked(uint8_t conditions, const modSprigRelayInputsTypedef *in) {
 	const uint8_t blocking = SPRIG_FAULT_B_DTI_WATCH_TIMEOUT | SPRIG_FAULT_B_CONFIG_INVALID | SPRIG_FAULT_B_HVIL_OPEN |
 	                         SPRIG_FAULT_B_REQUEST_DISAGREEMENT | SPRIG_FAULT_B_EXPANDER;
-	return (conditions & blocking) || !in->protectionsOk || in->sensingFault || in->maintenance;
+	return (conditions & blocking) || !in->closeAllowed || in->sensingFault || in->maintenance;
 }
 
 static bool modSprigRelayCrossCheckOk(const modSprigRelayConfigTypedef *config, const modSprigRelayInputsTypedef *in) {
@@ -106,6 +108,13 @@ modSprigRelayOutputsTypedef modSprigRelayStep(modSprigRelayStateTypedef *state, 
 	if(state->phase == SPRIG_PHASE_STANDBY)
 		state->faultsB = conditions;
 
+	// Any tripped protection opens everything and latches FAULT, whatever the phase (D11).
+	if(in->protectionTrip && state->phase != SPRIG_PHASE_FAULT) {
+		if(state->phase == SPRIG_PHASE_PRECHARGING || state->phase == SPRIG_PHASE_ENERGIZED)
+			state->lastOpenReason = SPRIG_OPEN_PROTECTION;
+		state->phase = SPRIG_PHASE_FAULT;
+	}
+
 	switch(state->phase) {
 		case SPRIG_PHASE_STANDBY:
 			if(modSprigRelayBothRequested(in) && !modSprigRelayCloseBlocked(conditions, in)) {
@@ -116,9 +125,7 @@ modSprigRelayOutputsTypedef modSprigRelayStep(modSprigRelayStateTypedef *state, 
 			break;
 
 		case SPRIG_PHASE_PRECHARGING:
-			if(!in->protectionsOk) {
-				modSprigRelayOpen(state, SPRIG_PHASE_STANDBY, SPRIG_OPEN_PROTECTION);
-			}else if(modSprigRelayBothWithdrawn(in)) {
+			if(modSprigRelayBothWithdrawn(in)) {
 				modSprigRelayOpen(state, SPRIG_PHASE_STANDBY, SPRIG_OPEN_REQUEST_WITHDRAWN);
 			}else if(modSprigRelayCloseBlocked(conditions, in)) {
 				// Not energized yet, so "will not close": abort the precharge.
@@ -139,11 +146,13 @@ modSprigRelayOutputsTypedef modSprigRelayStep(modSprigRelayStateTypedef *state, 
 			break;
 
 		case SPRIG_PHASE_ENERGIZED:
-			if(!in->protectionsOk)
-				modSprigRelayOpen(state, SPRIG_PHASE_STANDBY, SPRIG_OPEN_PROTECTION);
-			else if(modSprigRelayBothWithdrawn(in))
+			if(modSprigRelayBothWithdrawn(in))
 				modSprigRelayOpen(state, SPRIG_PHASE_STANDBY, SPRIG_OPEN_REQUEST_WITHDRAWN);
-			// Anything else holds; the conditions are latched below.
+			// Anything else holds, low-side conditions included (D12); the conditions are latched below.
+			break;
+
+		case SPRIG_PHASE_FAULT:
+			// Latched until power-off: relays stay open and the BMS keeps transmitting (D11).
 			break;
 
 		case SPRIG_PHASE_PRECHARGE_FAILED:

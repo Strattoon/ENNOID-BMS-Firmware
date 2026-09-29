@@ -36,8 +36,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-// Sprig fields appended to COMM_EBMS_SET_MCCONF: 9 x uint8, 4 x uint32, 5 x float32
-#define MODCOMMANDS_SPRIG_CONFIG_BYTES  (9*1 + 4*4 + 5*4)
+// Sprig fields appended to COMM_EBMS_SET_MCCONF: 9 x uint8, 5 x uint32, 7 x float32
+#define MODCOMMANDS_SPRIG_CONFIG_BYTES  (9*1 + 5*4 + 7*4)
 
 // Functions
 void modCommandsInit(modPowerElectronicsPackStateTypedef   *generalState,modConfigGeneralConfigStructTypedef *configPointer);

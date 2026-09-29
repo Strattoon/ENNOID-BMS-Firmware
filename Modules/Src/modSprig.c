@@ -8,7 +8,10 @@
 #include "libSprigCan.h"
 #include "modCAN.h"
 #include "modDelay.h"
+#include "modSprigProtection.h"
 #include <math.h>
+
+#define SPRIG_MEASUREMENT_PERIOD_MS 100   // modPowerElectronicsTask measurement cycle
 
 typedef struct {
 	uint16_t id;
@@ -33,6 +36,8 @@ static modPowerElectronicsPackStateTypedef *modSprigPackState;
 static modConfigGeneralConfigStructTypedef *modSprigConfig;
 static modSprigRelayStateTypedef            modSprigRelayState;
 static uint8_t                              modSprigFaultsA;
+static modSprigProtectionStateTypedef       modSprigProtectionState;
+static modSprigProtectionResultTypedef      modSprigProtectionResult;
 static bool                                 modSprigMaintenanceActive;
 
 void modSprigInit(modPowerElectronicsPackStateTypedef *packState, modConfigGeneralConfigStructTypedef *generalConfigPointer) {
@@ -43,6 +48,11 @@ void modSprigInit(modPowerElectronicsPackStateTypedef *packState, modConfigGener
 	modSprigFaultsA           = 0;
 	modSprigMaintenanceActive = false;
 	modSprigRelayInit(&modSprigRelayState);
+	modSprigProtectionInit(&modSprigProtectionState);
+	modSprigProtectionResult.faultsA       = 0;
+	modSprigProtectionResult.trip          = false;
+	modSprigProtectionResult.lowSideBlock  = true;                             // Nothing measured yet
+	modSprigProtectionResult.chargeInhibit = false;
 	modSprigInputsInit(generalConfigPointer);
 
 	for(uint8_t slot = 0; slot < SPRIG_TX_SLOTS; slot++)
@@ -81,51 +91,53 @@ void modSprigCANReceive(uint32_t id, bool extended, uint8_t dlc, const uint8_t *
 
 // ---- Protection and sensing faults ----
 
-static uint8_t modSprigFaultsALive(void) {
+static void modSprigUpdateProtection(void) {
 	modPowerElectronicsPackStateTypedef *pack = modSprigPackState;
 	modConfigGeneralConfigStructTypedef *cfg  = modSprigConfig;
-	bool cellsKnown = !pack->cellMonitorCommFault && pack->cellVoltageHigh > 0.0f;         // 0 V: not read yet
-	uint8_t faults = 0;
+	modSprigProtectionConfigTypedef protectionConfig;
+	modSprigProtectionInputsTypedef in;
 
-	if(cellsKnown && pack->cellVoltageHigh > cfg->cellHardOverVoltage)
-		faults |= SPRIG_FAULT_A_CELL_OVER_VOLTAGE;
-	if(cellsKnown && (pack->cellVoltageLow < cfg->cellHardUnderVoltage || pack->cellVoltageLow <= cfg->cellLCSoftUnderVoltage))
-		faults |= SPRIG_FAULT_A_CELL_UNDER_VOLTAGE;
-	if(pack->dischargeOverCurrentTrip)
-		faults |= SPRIG_FAULT_A_DISCHARGE_OVER_CURRENT;
-	if(pack->chargeOverCurrentTrip)
-		faults |= SPRIG_FAULT_A_CHARGE_OVER_CURRENT;
-	if(pack->tempBatteryHigh >= cfg->allowedTempBattDischargingMax || (cfg->tempEnableMaskBMS && pack->tempBMSHigh > cfg->allowedTempBMSMax))
-		faults |= SPRIG_FAULT_A_OVER_TEMPERATURE;
-	if(pack->tempBatteryLow <= cfg->allowedTempBattChargingMin)
-		faults |= SPRIG_FAULT_A_CHARGE_UNDER_TEMP;
-	if(pack->cellMonitorCommFault)
-		faults |= SPRIG_FAULT_A_CELL_MONITOR_COMM;
-	if(pack->currentSensorFault)
-		faults |= SPRIG_FAULT_A_CURRENT_SENSOR;
+	protectionConfig.cellHardOverVoltage     = cfg->cellHardOverVoltage;
+	protectionConfig.packHardOverVoltage     = cfg->packHardOverVoltage;
+	protectionConfig.cellHardUnderVoltage    = cfg->cellHardUnderVoltage;
+	protectionConfig.cellSoftUnderVoltage    = cfg->cellLCSoftUnderVoltage;
+	protectionConfig.voltageTripDelayMs      = SPRIG_MEASUREMENT_PERIOD_MS * ((uint32_t)cfg->maxUnderAndOverVoltageErrorCount + 1);
+	protectionConfig.dischargeTripCurrent    = cfg->dischargeTripCurrent;
+	protectionConfig.dischargeTripDelayMs    = cfg->dischargeTripDelayMs;
+	protectionConfig.chargeTripCurrent       = cfg->chargeTripCurrent;
+	protectionConfig.chargeTripDelayMs       = cfg->chargeTripDelayMs;
+	protectionConfig.tempBatteryDischargeMax = cfg->allowedTempBattDischargingMax;
+	protectionConfig.tempBatteryDischargeMin = cfg->allowedTempBattDischargingMin;
+	protectionConfig.tempBatteryChargeMin    = cfg->allowedTempBattChargingMin;
+	protectionConfig.tempBMSMax              = cfg->allowedTempBMSMax;
+	protectionConfig.tempBMSEnabled          = cfg->tempEnableMaskBMS != 0;
+	protectionConfig.temperatureTripDelayMs  = SPRIG_MEASUREMENT_PERIOD_MS * ((uint32_t)cfg->maxUnderAndOverTemperatureErrorCount + 1);
 
-	return faults;
-}
+	in.nowMs              = HAL_GetTick();
+	in.cellsKnown         = modPowerElectronicsCellVoltagesKnown();
+	in.cellVoltageHigh    = pack->cellVoltageHigh;
+	in.cellVoltageLow     = pack->cellVoltageLow;
+	in.packKnown          = !pack->currentSensorFault;
+	in.packVoltage        = pack->packVoltage;
+	in.packCurrent        = pack->packCurrent;
+	in.tempBatteryHigh    = pack->tempBatteryHigh;
+	in.tempBatteryLow     = pack->tempBatteryLow;
+	in.tempBMSHigh        = pack->tempBMSHigh;
+	in.cellMonitorFault   = pack->cellMonitorCommFault;
+	in.currentSensorFault = pack->currentSensorFault;
 
-static void modSprigUpdateFaults(void) {
-	uint8_t live = modSprigFaultsALive();
+	modSprigProtectionResult = modSprigProtectionEvaluate(&modSprigProtectionState, &protectionConfig, &in);
 
-	// Latched protection faults clear only in STANDBY, once the condition is gone.
-	if(modSprigPackState->operationalState == OP_STATE_STANDBY)
-		modSprigFaultsA = live;
+	// Latched protection faults clear only in STANDBY, once the condition is gone. Trip bits
+	// (0, 2, 3, 4) stay latched in modSprigProtectionState until power-off (D11).
+	if(pack->operationalState == OP_STATE_STANDBY)
+		modSprigFaultsA = modSprigProtectionResult.faultsA;
 	else
-		modSprigFaultsA |= live;
+		modSprigFaultsA |= modSprigProtectionResult.faultsA;
 }
 
-// Permissions bits 0 and 2 (spec "Sequence" step 2) and no hard protection error.
-static bool modSprigProtectionsOk(void) {
-	modPowerElectronicsPackStateTypedef *pack = modSprigPackState;
-
-	return pack->disChargeLCAllowed && pack->packInSOADischarge &&
-	       pack->packOperationalCellState != PACK_STATE_ERROR_HARD_CELLVOLTAGE &&
-	       pack->packOperationalCellState != PACK_STATE_ERROR_TEMPERATURE &&
-	       pack->packOperationalCellState != PACK_STATE_ERROR_OVER_CURRENT &&
-	       !pack->dischargeOverCurrentTrip && !pack->chargeOverCurrentTrip;
+bool modSprigProtectionTripped(void) {
+	return modSprigEnabled() && modSprigProtectionResult.trip;
 }
 
 // ---- Relay supervisor ----
@@ -137,7 +149,7 @@ modSprigRelayPhaseTypedef modSprigRelayTask(void) {
 	modSprigDtiWatchTypedef     watch    = modSprigInputsDtiWatch();
 	modSprigExpanderTypedef     expander = modSprigInputsExpander();
 
-	modSprigUpdateFaults();
+	modSprigUpdateProtection();
 
 	relayConfig.relayRequestDebounceMs   = modSprigConfig->relayRequestDebounceMs;
 	relayConfig.prechargeTimeoutMs       = modSprigConfig->prechargeTimeoutMs;
@@ -147,7 +159,9 @@ modSprigRelayPhaseTypedef modSprigRelayTask(void) {
 	in.nowMs           = HAL_GetTick();
 	in.configValid     = modConfigSprigValid(modSprigConfig);
 	in.maintenance     = modSprigMaintenanceActive;
-	in.protectionsOk   = modSprigProtectionsOk();
+	in.protectionTrip  = modSprigProtectionResult.trip;
+	// Permissions bits 0 and 2 (spec "Sequence" step 2) and no low-side condition (D12): gates closing only.
+	in.closeAllowed    = modSprigPackState->disChargeLCAllowed && modSprigPackState->packInSOADischarge && !modSprigProtectionResult.lowSideBlock;
 	in.sensingFault    = (modSprigFaultsA & (SPRIG_FAULT_A_CELL_MONITOR_COMM | SPRIG_FAULT_A_CURRENT_SENSOR)) != 0;
 	in.dtiWatchHealthy = watch.healthy;
 	in.dtiCanRequest   = watch.canRequest;
@@ -274,7 +288,9 @@ static void modSprigBuildFrame(uint16_t id, uint8_t counter, uint8_t frame[SPRIG
 		case SPRIG_CAN_ID_LIMITS: {
 			libSprigCanLimitsFrameTypedef l;
 			l.dischargeCurrentLimitDeciAmp = (uint16_t)libSprigCanScale(cfg->maxDischargeCurrent * pack->throttleDutyDischarge / 1000.0f, 10.0f, 0, 0xFFFF, 0);
-			l.chargeCurrentLimitDeciAmp    = (uint16_t)libSprigCanScale(cfg->maxChargeCurrent * pack->throttleDutyCharge / 1000.0f, 10.0f, 0, 0xFFFF, 0);
+			// Charge under-temperature (faults_a bit 5) drops the charge limit to 0 (D12).
+			l.chargeCurrentLimitDeciAmp    = modSprigProtectionResult.chargeInhibit ? 0 :
+			                                 (uint16_t)libSprigCanScale(cfg->maxChargeCurrent * pack->throttleDutyCharge / 1000.0f, 10.0f, 0, 0xFFFF, 0);
 			l.stateOfChargeCentiPercent    = (uint16_t)libSprigCanScale(pack->SoC, 100.0f, 0, 10000, 0);
 			libSprigCanPackLimits(&l, counter, frame);
 			} break;
@@ -330,6 +346,6 @@ void modSprigTask(void) {
 		return;
 
 	modSprigInputsExpanderTask();
-	modSprigUpdateFaults();
+	modSprigUpdateProtection();
 	modSprigTransmitSchedule();
 }

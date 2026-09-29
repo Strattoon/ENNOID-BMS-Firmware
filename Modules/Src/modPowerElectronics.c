@@ -60,11 +60,10 @@ float currentOffset = 0.0f;
 
 // Sprig sensing faults (D10) and discharge over-current trip (D8)
 uint8_t  modPowerElectronicsCellMonitorFailCount;
-bool     modPowerElectronicsCellDataValid;                                                  // At least one PEC-clean cell voltage read
+bool     modPowerElectronicsCellDataValidFlag;                                              // At least one PEC-clean cell voltage read
 uint8_t  modPowerElectronicsCurrentSensorFailCount;
 bool     modPowerElectronicsCurrentSensorSampleOk;
-bool     modPowerElectronicsDischargeTripTiming;
-uint32_t modPowerElectronicsDischargeTripStartTick;
+
 //float currentOffsetTemp = 0.0f;
 uint8_t currentOffsetCounter = 0;
 
@@ -137,12 +136,9 @@ void modPowerElectronicsInit(modPowerElectronicsPackStateTypedef *packState, mod
 	modPowerElectronicsPackStateHandle->dtiEnableDesired				= false;
 	modPowerElectronicsPackStateHandle->cellMonitorCommFault			= false;
 	modPowerElectronicsPackStateHandle->currentSensorFault				= false;
-	modPowerElectronicsPackStateHandle->dischargeOverCurrentTrip			= false;
-	modPowerElectronicsPackStateHandle->chargeOverCurrentTrip			= false;
 	modPowerElectronicsCellMonitorFailCount						= 0;
-	modPowerElectronicsCellDataValid						= false;
+	modPowerElectronicsCellDataValidFlag						= false;
 	modPowerElectronicsCurrentSensorFailCount					= 0;
-	modPowerElectronicsDischargeTripTiming						= false;
 	
 	// init the cell module variables empty
 	for( uint8_t modulePointer = 0; modulePointer < NoOfCellMonitorsPossibleOnBMS; modulePointer++) {
@@ -209,7 +205,9 @@ bool modPowerElectronicsTask(void) {
 		modPowerElectronicsSamplePackAndLCData();
 		
 		// Check whether packvoltage is whithin theoretical limits
-		if(modPowerElectronicsPackStateHandle->packVoltage >= (modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsGeneralConfigHandle->cellHardOverVoltage)) {
+		// Upstream treats a pack above series x cell limit as a sensing error. In Sprig mode a real pack
+		// over-voltage must trip packHardOverVoltage (D13), not be hidden as a sensing fault.
+		if(!modPowerElectronicsGeneralConfigHandle->sprigCanEnabled && modPowerElectronicsPackStateHandle->packVoltage >= (modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsGeneralConfigHandle->cellHardOverVoltage)) {
 			modPowerElectronicsVoltageSenseError = true;
 		}
 		// Sprig faults_a bit 7: pack-voltage sense error or repeated ISL28022 transfer failures (D10).
@@ -489,6 +487,9 @@ void modPowerElectronicsCallMonitorsCalcBalanceResistorArray(void) {
 void modPowerElectronicsSubTaskVoltageWatch(void) {
 	static bool lastdisChargeLCAllowed = false;
 	static bool lastChargeAllowed = false;
+	// Sprig D12: while the main relay is commanded closed, soft under-voltage and discharge temperature
+	// limits only warn; they keep discharge-allowed (permissions bit 0) and block the next close instead.
+	bool holdDischargeAllowed = modPowerElectronicsGeneralConfigHandle->sprigCanEnabled && modPowerElectronicsPackStateHandle->disChargeDesired;
 	
 	//modPowerElectronicsCellMonitorsReadVoltageFlags(&hardUnderVoltageFlags,&hardOverVoltageFlags);
 	modPowerElectronicsCalculateCellStats();
@@ -497,19 +498,19 @@ void modPowerElectronicsSubTaskVoltageWatch(void) {
 		
 		// Handle soft cell voltage limits & temperatures
 		//Discharge disable
-		if(modPowerElectronicsPackStateHandle->cellVoltageLow <= modPowerElectronicsGeneralConfigHandle->cellLCSoftUnderVoltage) {
+		if(!holdDischargeAllowed && modPowerElectronicsPackStateHandle->cellVoltageLow <= modPowerElectronicsGeneralConfigHandle->cellLCSoftUnderVoltage) {
 			modPowerElectronicsPackStateHandle->disChargeLCAllowed = false;
 			modPowerElectronicsDisChargeLCRetryLastTick = HAL_GetTick();
 			modPowerElectronicsPackStateHandle->faultState = FAULT_CODE_CELL_SOFT_UNDER_VOLTAGE;
 		}
 
-		if(modPowerElectronicsPackStateHandle->tempBatteryHigh >= modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMax){
+		if(!holdDischargeAllowed && modPowerElectronicsPackStateHandle->tempBatteryHigh >= modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMax){
 			modPowerElectronicsPackStateHandle->disChargeLCAllowed = false;
 			modPowerElectronicsDisChargeLCRetryLastTick = HAL_GetTick();
 			modPowerElectronicsPackStateHandle->faultState = FAULT_CODE_DISCHARGE_OVER_TEMP_CELLS;
 		}
 		
-		if(modPowerElectronicsPackStateHandle->tempBatteryLow <= modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMin){
+		if(!holdDischargeAllowed && modPowerElectronicsPackStateHandle->tempBatteryLow <= modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMin){
 			modPowerElectronicsPackStateHandle->disChargeLCAllowed = false;
 			modPowerElectronicsDisChargeLCRetryLastTick = HAL_GetTick();
 			modPowerElectronicsPackStateHandle->faultState = FAULT_CODE_DISCHARGE_UNDER_TEMP_CELLS;
@@ -557,14 +558,13 @@ void modPowerElectronicsSubTaskVoltageWatch(void) {
 		
 	}
 	
-	// Handle hard cell voltage limits
-	// In Sprig mode a pack-voltage sensing error is faults_a bit 7: it holds and blocks the next close (D10).
-	// Likewise a cell-monitor fault (faults_a bit 6) leaves the cell limits blind rather than tripping them on
-	// stale or never-read (0 V) values.
-	bool packVoltageSenseTrip = !modPowerElectronicsGeneralConfigHandle->sprigCanEnabled && (modPowerElectronicsVoltageSenseError || (modPowerElectronicsPackStateHandle->packVoltage > modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsGeneralConfigHandle->cellHardOverVoltage));
-	bool cellVoltagesKnown = !modPowerElectronicsGeneralConfigHandle->sprigCanEnabled || (modPowerElectronicsCellDataValid && !modPowerElectronicsPackStateHandle->cellMonitorCommFault);
-	bool cellHardLimitTrip = cellVoltagesKnown && (modPowerElectronicsPackStateHandle->cellVoltageHigh > modPowerElectronicsGeneralConfigHandle-> cellHardOverVoltage || modPowerElectronicsPackStateHandle->cellVoltageLow < modPowerElectronicsGeneralConfigHandle-> cellHardUnderVoltage);
-	if(packVoltageSenseTrip || cellHardLimitTrip) {
+	// Handle hard cell voltage and temperature limits. In Sprig mode modSprigProtection decides instead:
+	// hard under-voltage holds in flight (D12), over-voltage and over-temperature latch FAULT without
+	// powering down (D11), and sensing faults leave the limits blind (D10).
+	if(modPowerElectronicsGeneralConfigHandle->sprigCanEnabled) {
+		modPowerElectronicsUnderAndOverVoltageErrorCount = 0;
+		modPowerElectronicsUnderAndOverTemperatureErrorCount = 0;
+	}else if(modPowerElectronicsVoltageSenseError || modPowerElectronicsPackStateHandle->cellVoltageHigh > modPowerElectronicsGeneralConfigHandle-> cellHardOverVoltage || modPowerElectronicsPackStateHandle->cellVoltageLow < modPowerElectronicsGeneralConfigHandle-> cellHardUnderVoltage || (modPowerElectronicsPackStateHandle->packVoltage > modPowerElectronicsGeneralConfigHandle->noOfCellsSeries*modPowerElectronicsGeneralConfigHandle->cellHardOverVoltage)) {
 		if(modPowerElectronicsUnderAndOverVoltageErrorCount++ > modPowerElectronicsGeneralConfigHandle->maxUnderAndOverVoltageErrorCount){
 			modPowerElectronicsPackStateHandle->packOperationalCellState = PACK_STATE_ERROR_HARD_CELLVOLTAGE;
 			modPowerElectronicsPackStateHandle->faultState = FAULT_CODE_MAX_UVP_OVP_ERRORS;
@@ -575,7 +575,9 @@ void modPowerElectronicsSubTaskVoltageWatch(void) {
 		modPowerElectronicsUnderAndOverVoltageErrorCount = 0;
 	
 		// Handle temperature limits
-	if(modPowerElectronicsPackStateHandle->tempBatteryHigh > (modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMax + 10.0f) || modPowerElectronicsPackStateHandle->tempBatteryLow < (modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMin - 10.0f)) {
+	if(modPowerElectronicsGeneralConfigHandle->sprigCanEnabled) {
+		// See above: modSprigProtection
+	}else if(modPowerElectronicsPackStateHandle->tempBatteryHigh > (modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMax + 10.0f) || modPowerElectronicsPackStateHandle->tempBatteryLow < (modPowerElectronicsGeneralConfigHandle->allowedTempBattDischargingMin - 10.0f)) {
 		if(modPowerElectronicsUnderAndOverTemperatureErrorCount++ > modPowerElectronicsGeneralConfigHandle->maxUnderAndOverTemperatureErrorCount){
 			modPowerElectronicsPackStateHandle->packOperationalCellState = PACK_STATE_ERROR_TEMPERATURE;
 			modPowerElectronicsPackStateHandle->faultState = FAULT_CODE_MAX_UVT_OVT_ERRORS;
@@ -600,46 +602,32 @@ static void modPowerElectronicsOverCurrentTrip(void) {
 }
 
 void 	modPowerElectronicsSubTaskCurrentWatch(void){
-	// ENNOID packCurrent is positive while charging (see modStateOfChargeProcess).
-	if(!modPowerElectronicsGeneralConfigHandle->sprigCanEnabled) {
-		// Handle over current limits 
-		if(modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->maxAllowedCurrent)
-			modPowerElectronicsOverCurrentTrip();
+	// Sprig: charge and discharge over-current trip with a delay in modSprigProtection (D8, D14).
+	if(modPowerElectronicsGeneralConfigHandle->sprigCanEnabled)
 		return;
-	}
 	
-	// A current-sensor fault means the current is unknown: hold (D10).
-	if(modPowerElectronicsPackStateHandle->currentSensorFault) {
-		modPowerElectronicsDischargeTripTiming = false;
-		return;
-	}
-	
-	// Charge over-current (faults_a bit 3): the generator must not push more than maxChargeCurrent into the pack (D8).
-	if(modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->maxChargeCurrent) {
-		modPowerElectronicsPackStateHandle->chargeOverCurrentTrip = true;
+	// Handle over current limits (ENNOID packCurrent is positive while charging)
+	if(modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->maxAllowedCurrent)
 		modPowerElectronicsOverCurrentTrip();
-	}
-	
-	// Discharge over-current (faults_a bit 2): above dischargeTripCurrent for longer than dischargeTripDelayMs (D8).
-	if(-modPowerElectronicsPackStateHandle->packCurrent > modPowerElectronicsGeneralConfigHandle->dischargeTripCurrent) {
-		if(!modPowerElectronicsDischargeTripTiming) {
-			modPowerElectronicsDischargeTripTiming = true;
-			modPowerElectronicsDischargeTripStartTick = HAL_GetTick();
-		}else if((uint32_t)(HAL_GetTick() - modPowerElectronicsDischargeTripStartTick) >= modPowerElectronicsGeneralConfigHandle->dischargeTripDelayMs) {
-			modPowerElectronicsPackStateHandle->dischargeOverCurrentTrip = true;
-			modPowerElectronicsOverCurrentTrip();
-		}
-	}else{
-		modPowerElectronicsDischargeTripTiming = false;
-	}
 };
+
+// PEC-clean cell voltages have been read and the cell monitors are not failing (Sprig D10).
+bool modPowerElectronicsCellVoltagesKnown(void) {
+	return modPowerElectronicsCellDataValidFlag && !modPowerElectronicsPackStateHandle->cellMonitorCommFault;
+}
+
+// In Sprig mode the relay supervisor and modSprigProtection own the discharge path, so the stock
+// discharge-allowed gate must not open the main relay behind their back (hold policy, D12).
+static bool modPowerElectronicsDischargePathAllowed(void) {
+	return modPowerElectronicsPackStateHandle->disChargeLCAllowed || modPowerElectronicsAllowForcedOnState || modPowerElectronicsGeneralConfigHandle->sprigCanEnabled;
+}
 
 // Update switch states, should be called after every desired/allowed switch state change
 void modPowerElectronicsUpdateSwitches(void) {
 	// Do the actual power switching in here
 	
 	//Handle precharge output
-	if(modPowerElectronicsPackStateHandle->preChargeDesired && (modPowerElectronicsPackStateHandle->disChargeLCAllowed || modPowerElectronicsAllowForcedOnState)){
+	if(modPowerElectronicsPackStateHandle->preChargeDesired && modPowerElectronicsDischargePathAllowed()){
 		driverHWSwitchesSetSwitchState(SWITCH_PRECHARGE,(driverHWSwitchesStateTypedef)SWITCH_SET);
 		driverHWSwitchesSetSwitchState(SWITCH_DISCHARGEHV,(driverHWSwitchesStateTypedef)SWITCH_SET);
 	}else{
@@ -647,7 +635,7 @@ void modPowerElectronicsUpdateSwitches(void) {
 		driverHWSwitchesSetSwitchState(SWITCH_DISCHARGEHV,(driverHWSwitchesStateTypedef)SWITCH_RESET);
 	};
 	//Handle discharge output
-	if(modPowerElectronicsPackStateHandle->disChargeDesired && (modPowerElectronicsPackStateHandle->disChargeLCAllowed || modPowerElectronicsAllowForcedOnState)){
+	if(modPowerElectronicsPackStateHandle->disChargeDesired && modPowerElectronicsDischargePathAllowed()){
 		driverHWSwitchesSetSwitchState(SWITCH_DISCHARGE,(driverHWSwitchesStateTypedef)SWITCH_SET);
 		driverHWSwitchesSetSwitchState(SWITCH_DISCHARGEHV,(driverHWSwitchesStateTypedef)SWITCH_SET);
 	}else{
@@ -670,7 +658,7 @@ void modPowerElectronicsUpdateSwitches(void) {
 	#else
 	if(modPowerElectronicsGeneralConfigHandle->sprigCanEnabled && modPowerElectronicsGeneralConfigHandle->dtiEnableOutput == dtiEnableOutputCooling) {
 		// DTI inverter enable (spec D4): "main closed and precharge complete", driven only in ENERGIZED.
-		bool mainClosed = modPowerElectronicsPackStateHandle->disChargeDesired && (modPowerElectronicsPackStateHandle->disChargeLCAllowed || modPowerElectronicsAllowForcedOnState);
+		bool mainClosed = modPowerElectronicsPackStateHandle->disChargeDesired && modPowerElectronicsDischargePathAllowed();
 		if(modPowerElectronicsPackStateHandle->dtiEnableDesired && mainClosed && !modPowerElectronicsPackStateHandle->preChargeDesired)
 			driverHWSwitchesSetSwitchState(SWITCH_COOLING,(driverHWSwitchesStateTypedef)SWITCH_SET);
 		else
@@ -1061,7 +1049,7 @@ void modPowerElectronicsCellMonitorsCheckConfigAndReadAnalogData(void){
 			// Read cell voltages
 			if(driverSWLTC6804ReadCellVoltagesArray(modPowerElectronicsPackStateHandle->cellModuleVoltages)) {
 				modPowerElectronicsCellMonitorFailCount = 0;
-				modPowerElectronicsCellDataValid = true;
+				modPowerElectronicsCellDataValidFlag = true;
 			}
 			else if(modPowerElectronicsCellMonitorFailCount < 0xFF)
 				modPowerElectronicsCellMonitorFailCount++;                                           // PEC failure: the last good values are kept

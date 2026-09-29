@@ -49,6 +49,9 @@ static const modSprigTerminalFieldTypedef modSprigTerminalFields[] = {
 	SPRIG_FIELD(maxChargeCurrent,         SPRIG_FIELD_FLOAT),
 	SPRIG_FIELD(dischargeTripCurrent,     SPRIG_FIELD_FLOAT),
 	SPRIG_FIELD(dischargeTripDelayMs,     SPRIG_FIELD_U32),
+	SPRIG_FIELD(chargeTripCurrent,        SPRIG_FIELD_FLOAT),
+	SPRIG_FIELD(chargeTripDelayMs,        SPRIG_FIELD_U32),
+	SPRIG_FIELD(packHardOverVoltage,      SPRIG_FIELD_FLOAT),
 };
 #define SPRIG_TERMINAL_FIELDS (sizeof(modSprigTerminalFields) / sizeof(modSprigTerminalFields[0]))
 

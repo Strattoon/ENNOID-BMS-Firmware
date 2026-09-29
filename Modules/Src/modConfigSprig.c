@@ -33,6 +33,9 @@ void modConfigLoadSprigDefaults(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->maxChargeCurrent         = 5.2f;                     // 1 C
 	configLocation->dischargeTripCurrent     = 234.0f;
 	configLocation->dischargeTripDelayMs     = 1000;
+	configLocation->chargeTripCurrent        = 26.0f;                    // The pack's 5 C maximum charge (D14)
+	configLocation->chargeTripDelayMs        = 1000;
+	configLocation->packHardOverVoltage      = MODCONFIG_SPRIG_MAX_PACK_VOLTAGE;  // Master-HV operating limit (D13)
 	configLocation->sprigConfigMagic         = MODCONFIG_SPRIG_MAGIC;
 }
 
@@ -96,9 +99,13 @@ bool modConfigSprigValid(const modConfigGeneralConfigStructTypedef *configLocati
 		return false;
 	if(configLocation->dischargeTripDelayMs == 0)
 		return false;
+	if(!modConfigSprigInRange(configLocation->chargeTripCurrent, 0.1f, 1.0e5f))
+		return false;
+	if(configLocation->chargeTripDelayMs == 0)
+		return false;
 
-	// The pack stays below the Master-HV 400 V operating limit (D8).
-	if(!modConfigSprigInRange((float)configLocation->noOfCellsSeries * configLocation->cellHardOverVoltage, 0.0f, MODCONFIG_SPRIG_MAX_PACK_VOLTAGE))
+	// The pack-total limit keeps the pack below the Master-HV 400 V operating limit (D13).
+	if(!modConfigSprigInRange(configLocation->packHardOverVoltage, 1.0f, MODCONFIG_SPRIG_MAX_PACK_VOLTAGE))
 		return false;
 
 	// The CANopen charger path listens on 0x048A, the standard broadcast of DTI node 10.

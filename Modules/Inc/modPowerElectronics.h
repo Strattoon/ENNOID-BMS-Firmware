@@ -126,8 +126,6 @@ typedef struct {
 	uint8_t  dtiEnableDesired;                // Sprig: DTI inverter enable (main closed and precharge complete)
 	uint8_t  cellMonitorCommFault;            // Sprig faults_a bit 6: LTC PEC failures past the configured count
 	uint8_t  currentSensorFault;              // Sprig faults_a bit 7: current or pack-voltage sensor fault
-	uint8_t  dischargeOverCurrentTrip;        // Sprig faults_a bit 2
-	uint8_t  chargeOverCurrentTrip;           // Sprig faults_a bit 3
 	cellMonitorCellsTypeDef cellVoltagesIndividual[NoOfCellsPossibleOnBMS];
 	auxMonitorTypeDef auxVoltagesIndividual[NoOfAuxPossibleOnBMS];
 	expMonitorTypeDef expVoltagesIndividual[NoOfExpPossibleOnBMS];
@@ -153,6 +151,7 @@ void  modPowerElectronicsSetCharge(bool newState);
 void  modPowerElectronicsSetChargePFET(bool newState);
 void  modPowerElectronicsSetCooling(bool newState);
 void  modPowerElectronicsSetSprigRelays(bool preCharge, bool disCharge, bool dtiEnable);
+bool  modPowerElectronicsCellVoltagesKnown(void);
 void  modPowerElectronicsDisableAll(void);
 void  modPowerElectronicsCalculateCellStats(void);
 void  modPowerElectronicsSubTaskBalancing(void);

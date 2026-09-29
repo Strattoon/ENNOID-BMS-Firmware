@@ -19,6 +19,10 @@
  */
  
 #include "modStateOfCharge.h"
+#include "libSprigOcv.h"
+#include <math.h>
+
+#define SOC_OCV_SETTLE_MS 2000   // Let the first cell readings settle before trusting them as resting voltages
 
 modStateOfChargeStructTypeDef modStateOfChargeGeneralStateOfCharge;
 modPowerElectronicsPackStateTypedef *modStateOfChargePackStatehandle;
@@ -27,6 +31,7 @@ uint32_t modStateOfChargeLargeCoulombTick;
 uint32_t modStateOfChargeStoreSoCTick;
 
 bool modStateOfChargePowerDownSavedFlag = false;
+static bool modStateOfChargeOcvInitPending = false;       // Storage was empty: estimate SoC from the resting cell voltage
 
 modStateOfChargeStructTypeDef* modStateOfChargeInit(modPowerElectronicsPackStateTypedef *packState, modConfigGeneralConfigStructTypedef *generalConfigPointer){
 	modStateOfChargePackStatehandle = packState;
@@ -39,10 +44,26 @@ modStateOfChargeStructTypeDef* modStateOfChargeInit(modPowerElectronicsPackState
 	return &modStateOfChargeGeneralStateOfCharge;
 };
 
+// First boot after flashing (or with empty storage): start from the resting cell voltage instead of
+// assuming a full pack. Waits for PEC-clean cell data while the pack is at rest.
+static void modStateOfChargeOcvInit(void) {
+	if(!modStateOfChargeOcvInitPending || HAL_GetTick() < SOC_OCV_SETTLE_MS || !modPowerElectronicsCellVoltagesKnown())
+		return;
+	if(fabsf(modStateOfChargePackStatehandle->packCurrent) >= modStateOfChargeGeneralConfigHandle->notUsedCurrentThreshold)
+		return;                                                                        // Not resting: an OCV estimate would be wrong
+	
+	modStateOfChargeGeneralStateOfCharge.remainingCapacityAh = modStateOfChargeGeneralConfigHandle->batteryCapacity *
+		libSprigOcvStateOfCharge(modStateOfChargePackStatehandle->cellVoltageAverage) / 100.0f;
+	modStateOfChargeOcvInitPending = false;
+	modStateOfChargeStoreStateOfCharge();
+}
+
 void modStateOfChargeProcess(void){
 	// Calculate accumulated energy
 	uint32_t dt = HAL_GetTick() - modStateOfChargeLargeCoulombTick;
 	modStateOfChargeStructTypeDef lastGeneralStateOfCharge;
+	
+	modStateOfChargeOcvInit();
 	
 	lastGeneralStateOfCharge = modStateOfChargeGeneralStateOfCharge;
 	
@@ -82,6 +103,7 @@ bool modStateOfChargeStoreAndLoadDefaultStateOfCharge(void){
 		
 		driverSWStorageManagerStateOfChargeEmpty = false;
 		driverSWStorageManagerStoreStruct(&defaultStateOfCharge,STORAGE_STATEOFCHARGE);
+		modStateOfChargeOcvInitPending = true;                                        // Replaced once resting cell voltages are known
 		// TODO_EEPROM
 	}
 	

@@ -321,11 +321,11 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->noOfParallelModules                       	= 1;                     		// Number of parallel modules
 	configLocation->batteryCapacity					= 22.00f;				// XXAh battery
 	configLocation->cellHardUnderVoltage				= 3.00f;				// Worst case X.XXV as lowest cell voltage (Sprig D8: pack 3.0 V/cell min)
-	configLocation->cellHardOverVoltage				= 3.636f;				// Worst case X.XXV as highest cell voltage (Sprig D8: 110S x 3.636 V <= 400 V)
+	configLocation->cellHardOverVoltage				= 3.70f;				// Worst case X.XXV as highest cell voltage (Sprig D13: imbalance margin above the 3.59 V target)
 	configLocation->cellLCSoftUnderVoltage				= 3.50f;				// Lowest cell voltage X.XXV. (Sprig D8)
 	configLocation->cellSoftOverVoltage				= 3.59f;				// Normal highest cell voltage X.XXV. (Sprig D8: charge target)
 	configLocation->cellBalanceDifferenceThreshold                 	= 0.01f;				// Start balancing @ XmV difference, stop if below.
-	configLocation->cellBalanceStart				= 4.1f;					// Start balancing above X.XXV.
+	configLocation->cellBalanceStart				= 3.55f;				// Start balancing above X.XXV. (Sprig: below the 3.59 V charge target)
 	configLocation->cellBalanceAllTime				= false;				// Enable balancing under all opstate
 	configLocation->cellThrottleUpperStart				= 0.03f;				// Upper range of cell voltage for charge throttling.
 	configLocation->cellThrottleLowerStart				= 0.20f;				// Lower range of cell voltage for discharge throttling.
@@ -358,7 +358,7 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->minimalPrechargePercentage			= 0.70f;				// output should be at a minimal of 80% of input voltage.
 	configLocation->timeoutLCPreCharge				= 1.5*1000;				// Precharge error timeout, allow 1.5 seconds pre-charge time before declaring load error.
 	configLocation->maxAllowedCurrent				= 1000.0f;				// Allow max XXXA trough BMS.
-	configLocation->allowedTempBattDischargingMax                  	= 75.0f;                  		// Max battery temperature where discharging is still allowed
+	configLocation->allowedTempBattDischargingMax                  	= 60.0f;                  		// Max battery temperature where discharging is still allowed (MaxAmps operating limit 60 C)
 	configLocation->allowedTempBattDischargingMin                  	= 0.0f;                    		// Min battery temperature where discharging is still allowed
 	configLocation->allowedTempBattChargingMax                     	= 50.0f;                   		// Max battery temperature where charging is still allowed
 	configLocation->allowedTempBattChargingMin                     	= 0.0f;                    		// Min battery temperature where charging is still allowed

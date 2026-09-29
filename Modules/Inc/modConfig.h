@@ -145,13 +145,16 @@ typedef struct {
 	float		prechargeMatchFraction;                                              // Load voltage must reach this fraction of the pack voltage
 	float		prechargeCrossCheckVolts;                                            // DTI 0x20 input voltage must agree with the load voltage within this
 	float		maxDischargeCurrent;                                                 // BMS_LIMITS discharge maximum, scaled by the discharge throttle (0 = unset)
-	float		maxChargeCurrent;                                                    // BMS_LIMITS charge maximum and charge over-current trip (0 = unset)
+	float		maxChargeCurrent;                                                    // BMS_LIMITS charge maximum the generator control should respect (0 = unset)
 	float		dischargeTripCurrent;                                                // Discharge over-current trip threshold (0 = unset, no default)
 	uint32_t	dischargeTripDelayMs;                                                // Current must stay above the threshold this long (0 = unset, no default)
+	float		chargeTripCurrent;                                                   // Charge over-current trip threshold (D14)
+	uint32_t	chargeTripDelayMs;                                                   // Charge current must stay above the threshold this long (D14)
+	float		packHardOverVoltage;                                                 // Pack-total over-voltage trip, at most 400 V (D13)
 	uint32_t	sprigConfigMagic;                                                    // MODCONFIG_SPRIG_MAGIC once the fields above have been initialised
 } modConfigGeneralConfigStructTypedef;
 
-#define MODCONFIG_SPRIG_MAGIC              0x53505231u  // "SPR1"
+#define MODCONFIG_SPRIG_MAGIC              0x53505232u  // "SPR2": bump whenever the Sprig fields change
 #define MODCONFIG_SPRIG_MAX_PACK_VOLTAGE   400.0f       // Master-HV operating limit (spec D8)
 
 typedef enum {

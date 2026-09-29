@@ -31,11 +31,14 @@ void modSprigTask(void);
 // Interrupt context: every received CAN frame.
 void modSprigCANReceive(uint32_t id, bool extended, uint8_t dlc, const uint8_t *data);
 
-// Called by the operational state machine in STANDBY, PRE_CHARGE, LOAD_ENABLED and ERROR_PRECHARGE.
+// Called by the operational state machine in STANDBY, PRE_CHARGE, LOAD_ENABLED, ERROR_PRECHARGE and ERROR.
 // Runs the relay supervisor, drives the relays and returns the phase.
 modSprigRelayPhaseTypedef modSprigRelayTask(void);
 
-// The operational state machine opened the relays itself (hard protection, power button).
+// The operational state machine opened the relays itself (power button).
 void modSprigRelaysForcedOpen(sprigCanOpenReasonTypedef reason);
+
+// A faults_a bit 0, 2, 3 or 4 protection has tripped (latched until power-off, D11).
+bool modSprigProtectionTripped(void);
 
 #endif

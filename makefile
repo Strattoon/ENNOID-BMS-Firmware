@@ -18,6 +18,7 @@ SRCS += ./Modules/Src/modConfigSprig.c
 SRCS += ./Modules/Src/modSprig.c
 SRCS += ./Modules/Src/modSprigInputs.c
 SRCS += ./Modules/Src/modSprigRelay.c
+SRCS += ./Modules/Src/modSprigProtection.c
 SRCS += ./Modules/Src/modSprigTerminal.c
 
 SRCS += ./Drivers/SWDrivers/Src/driverSWStorageManager.c
@@ -71,6 +72,7 @@ SRCS += ./Libraries/Src/libPacket.c
 SRCS += ./Libraries/Src/libRingBuffer.c
 SRCS += ./Libraries/Src/libMempools.c
 SRCS += ./Libraries/Src/libSprigCan.c
+SRCS += ./Libraries/Src/libSprigOcv.c
 
 SRCS += ./Config/confparser.c
 SRCS += ./Config/confxml.c
@@ -189,8 +191,10 @@ test:
 	mkdir -p $(HOST_TEST_DIR)
 	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_can.c Libraries/Src/libSprigCan.c -lm -o $(HOST_TEST_DIR)/test_sprig_can
 	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_relay.c Modules/Src/modSprigRelay.c Libraries/Src/libSprigCan.c -lm -o $(HOST_TEST_DIR)/test_sprig_relay
+	$(HOST_CC) $(HOST_TEST_FLAGS) tests/sprig/test_sprig_protection.c Modules/Src/modSprigProtection.c Libraries/Src/libSprigOcv.c -lm -o $(HOST_TEST_DIR)/test_sprig_protection
 	$(HOST_TEST_DIR)/test_sprig_can
 	$(HOST_TEST_DIR)/test_sprig_relay
+	$(HOST_TEST_DIR)/test_sprig_protection
 
 debug:
 	arm-none-eabi-gdb --eval-command="target remote localhost:3333" main.elf

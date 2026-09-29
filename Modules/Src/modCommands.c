@@ -297,6 +297,9 @@ void modCommandsProcessPacket(unsigned char *data, unsigned int len) {
 				modCommandsGeneralConfig->maxChargeCurrent			= libBufferGet_float32_auto(data,&ind);		// 4
 				modCommandsGeneralConfig->dischargeTripCurrent			= libBufferGet_float32_auto(data,&ind);		// 4
 				modCommandsGeneralConfig->dischargeTripDelayMs			= libBufferGet_uint32(data,&ind);		// 4
+				modCommandsGeneralConfig->chargeTripCurrent			= libBufferGet_float32_auto(data,&ind);		// 4
+				modCommandsGeneralConfig->chargeTripDelayMs			= libBufferGet_uint32(data,&ind);		// 4
+				modCommandsGeneralConfig->packHardOverVoltage			= libBufferGet_float32_auto(data,&ind);		// 4
 				modCommandsGeneralConfig->sprigConfigMagic			= MODCONFIG_SPRIG_MAGIC;
 			}
 			
@@ -432,6 +435,9 @@ void modCommandsProcessPacket(unsigned char *data, unsigned int len) {
 			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->maxChargeCurrent				,&ind); // 4
 			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->dischargeTripCurrent			,&ind); // 4
 			libBufferAppend_uint32(       modCommandsSendBuffer,modCommandsToBeSendConfig->dischargeTripDelayMs			,&ind); // 4
+			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->chargeTripCurrent			,&ind); // 4
+			libBufferAppend_uint32(       modCommandsSendBuffer,modCommandsToBeSendConfig->chargeTripDelayMs				,&ind); // 4
+			libBufferAppend_float32_auto( modCommandsSendBuffer,modCommandsToBeSendConfig->packHardOverVoltage			,&ind); // 4
 			libBufferAppend_uint8(        modCommandsSendBuffer,modCommandsToBeSendConfig->configRevision				,&ind); // 1
 			
 		  	modCommandsSendPacket(modCommandsSendBuffer, ind);

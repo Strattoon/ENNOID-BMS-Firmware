@@ -17,7 +17,8 @@ typedef enum {
 	SPRIG_PHASE_STANDBY = 0,
 	SPRIG_PHASE_PRECHARGING,
 	SPRIG_PHASE_ENERGIZED,
-	SPRIG_PHASE_PRECHARGE_FAILED
+	SPRIG_PHASE_PRECHARGE_FAILED,
+	SPRIG_PHASE_FAULT               // A protection tripped: relays open, latched until power-off (D11)
 } modSprigRelayPhaseTypedef;
 
 typedef struct {
@@ -31,7 +32,8 @@ typedef struct {
 	uint32_t nowMs;
 	bool     configValid;
 	bool     maintenance;           // Blocks closing; relays are never closed in MAINTENANCE
-	bool     protectionsOk;         // Discharge allowed and pack in SOA (permissions bits 0 and 2), faults_a bits 0-5 clear
+	bool     protectionTrip;        // faults_a bit 0, 2, 3 or 4 tripped (latched): open and latch FAULT
+	bool     closeAllowed;          // Permissions bits 0 and 2 and no low-side condition (D12); only gates closing
 	bool     sensingFault;          // faults_a bit 6 or 7: blocks closing, holds while energized (D10)
 	bool     dtiWatchHealthy;       // 0x20, 0x22 and 0x24 fresh from the configured node
 	bool     dtiCanRequest;         // 0x24 digital output (only meaningful while the watch is healthy)
@@ -63,7 +65,7 @@ typedef struct {
 void modSprigRelayInit(modSprigRelayStateTypedef *state);
 modSprigRelayOutputsTypedef modSprigRelayStep(modSprigRelayStateTypedef *state, const modSprigRelayConfigTypedef *config, const modSprigRelayInputsTypedef *in);
 
-// The operational state machine opened the relays outside the supervisor (hard protection, power button, maintenance).
+// The operational state machine opened the relays outside the supervisor (power button).
 void modSprigRelayForceOpen(modSprigRelayStateTypedef *state, sprigCanOpenReasonTypedef reason);
 
 #endif

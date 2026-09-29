@@ -14,7 +14,7 @@ static const modSprigRelayConfigTypedef config = {
 
 static modSprigRelayInputsTypedef healthyRequested(uint32_t nowMs) {
 	modSprigRelayInputsTypedef in = {
-		.nowMs = nowMs, .configValid = true, .maintenance = false, .protectionsOk = true, .sensingFault = false,
+		.nowMs = nowMs, .configValid = true, .maintenance = false, .protectionTrip = false, .closeAllowed = true, .sensingFault = false,
 		.dtiWatchHealthy = true, .dtiCanRequest = true, .dtiFaultCode = 0, .dtiInputVoltage = 0.0f,
 		.expanderOk = true, .hwRequest = true, .hvilClosed = true, .loadVoltage = 0.0f, .packVoltage = 396.0f,
 	};
@@ -89,9 +89,9 @@ static void testWillNotClose(void) {
 	SPRIG_CHECK("sensing fault: will not close (D10)", state.phase == SPRIG_PHASE_STANDBY);
 
 	modSprigRelayInit(&state);
-	in = healthyRequested(0); in.protectionsOk = false;
+	in = healthyRequested(0); in.closeAllowed = false;
 	modSprigRelayStep(&state, &config, &in);
-	SPRIG_CHECK("protections fail: will not close", state.phase == SPRIG_PHASE_STANDBY);
+	SPRIG_CHECK("low side (soft/hard UV, cold) or no discharge permission: will not close (D12)", state.phase == SPRIG_PHASE_STANDBY);
 
 	modSprigRelayInit(&state);
 	in = healthyRequested(0); in.maintenance = true;
@@ -158,9 +158,18 @@ static void testHoldPolicy(void) {
 	SPRIG_CHECK("energized, config invalid: hold, latch bit 4", state.phase == SPRIG_PHASE_ENERGIZED && out.main && (state.faultsB & SPRIG_FAULT_B_CONFIG_INVALID));
 
 	now = energize(&state);
-	in = healthyRequested(now + 50); in.loadVoltage = 390.0f; in.protectionsOk = false;
+	in = healthyRequested(now + 50); in.loadVoltage = 390.0f; in.closeAllowed = false;
 	out = modSprigRelayStep(&state, &config, &in);
-	SPRIG_CHECK("energized, protection: open, reason 2", state.phase == SPRIG_PHASE_STANDBY && !out.main && !out.dtiEnable && state.lastOpenReason == SPRIG_OPEN_PROTECTION);
+	SPRIG_CHECK("energized, soft UV / cold / hard UV: hold, relays stay closed (D12)", state.phase == SPRIG_PHASE_ENERGIZED && out.main && out.dtiEnable);
+	in.nowMs += 60000;
+	out = modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("energized, low side for a minute: still holding", state.phase == SPRIG_PHASE_ENERGIZED && out.main);
+	in.nowMs += 50; in.dtiCanRequest = false; in.hwRequest = false;
+	out = modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("low side: opens only on agreed withdrawal, reason 1", state.phase == SPRIG_PHASE_STANDBY && !out.main && state.lastOpenReason == SPRIG_OPEN_REQUEST_WITHDRAWN);
+	in.nowMs += 50; in.dtiCanRequest = true; in.hwRequest = true;
+	modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("low side: will not close again", state.phase == SPRIG_PHASE_STANDBY);
 
 	now = energize(&state);
 	modSprigRelayForceOpen(&state, SPRIG_OPEN_POWER_BUTTON);
@@ -210,9 +219,39 @@ static void testPrechargeFailure(void) {
 	modSprigRelayInit(&state);
 	in = healthyRequested(0);
 	modSprigRelayStep(&state, &config, &in);
-	in.nowMs = 100; in.protectionsOk = false;
+	in.nowMs = 100; in.protectionTrip = true;
+	out = modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("protection trip during precharge: FAULT, reason 2, all open", state.phase == SPRIG_PHASE_FAULT && state.lastOpenReason == SPRIG_OPEN_PROTECTION && !out.precharge && !out.main);
+}
+
+static void testFaultLatch(void) {
+	modSprigRelayStateTypedef state;
+	modSprigRelayInputsTypedef in;
+	modSprigRelayOutputsTypedef out;
+	uint32_t now;
+
+	now = energize(&state);
+	in = healthyRequested(now + 50); in.loadVoltage = 390.0f; in.protectionTrip = true;
+	out = modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("energized, protection trip: FAULT, reason 2, main and DTI enable open",
+		state.phase == SPRIG_PHASE_FAULT && !out.main && !out.precharge && !out.dtiEnable && state.lastOpenReason == SPRIG_OPEN_PROTECTION);
+
+	// D11: stays latched (and the BMS stays powered: the supervisor never leaves FAULT on its own).
+	in.nowMs += 3600000u;
+	out = modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("FAULT still latched an hour later", state.phase == SPRIG_PHASE_FAULT && !out.main);
+	in.nowMs += 50; in.dtiCanRequest = false; in.hwRequest = false;
 	modSprigRelayStep(&state, &config, &in);
-	SPRIG_CHECK("protection during precharge: STANDBY, reason 2", state.phase == SPRIG_PHASE_STANDBY && state.lastOpenReason == SPRIG_OPEN_PROTECTION);
+	in.nowMs += 50; in.dtiCanRequest = true; in.hwRequest = true;
+	out = modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("FAULT survives a withdraw/re-request cycle and never re-closes", state.phase == SPRIG_PHASE_FAULT && !out.main && !out.precharge);
+	modSprigRelayForceOpen(&state, SPRIG_OPEN_POWER_BUTTON);
+	SPRIG_CHECK("power button does not clear FAULT or its reason", state.phase == SPRIG_PHASE_FAULT && state.lastOpenReason == SPRIG_OPEN_PROTECTION);
+
+	modSprigRelayInit(&state);
+	in = healthyRequested(0); in.protectionTrip = true;
+	out = modSprigRelayStep(&state, &config, &in);
+	SPRIG_CHECK("trip in STANDBY: FAULT without an open reason", state.phase == SPRIG_PHASE_FAULT && !out.precharge && state.lastOpenReason == SPRIG_OPEN_NONE);
 }
 
 static void testTickWrap(void) {
@@ -231,6 +270,7 @@ int main(void) {
 	testWillNotClose();
 	testHoldPolicy();
 	testPrechargeFailure();
+	testFaultLatch();
 	testTickWrap();
 	return sprigTestSummary("test_sprig_relay");
 }
