@@ -28,3 +28,5 @@ History
 *.dbgconf
 tools/
 tests/sprig/build/
+.DS_Store
+.sprig-build/

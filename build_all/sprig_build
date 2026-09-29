@@ -1,0 +1,57 @@
+#!/bin/sh
+# Build the Sprig firmware and run the Sprig host tests in a capped podman container.
+#
+# Every run deletes and recreates <repo>/.sprig-build (git-ignored) from the working
+# tree, so only one build is ever kept on disk and the checkout itself stays clean.
+# Outputs: .sprig-build/main.elf, main.bin, main.map and build.log.
+#
+# The repository must sit under a folder shared with the podman machine.
+#
+# Overrides: SPRIG_BOARD (default ENNOID_HV), SPRIG_BUILD_IMAGE, SPRIG_BUILD_CPUS,
+# SPRIG_BUILD_MEMORY.
+set -eu
+
+REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+OUT="$REPO/.sprig-build"
+IMAGE=${SPRIG_BUILD_IMAGE:-localhost/ennoid-fw-build:bookworm}
+BOARD=${SPRIG_BOARD:-ENNOID_HV}
+CPUS=${SPRIG_BUILD_CPUS:-2}
+MEMORY=${SPRIG_BUILD_MEMORY:-2g}
+
+# BMS_IDENT.firmware_build carries the commit only for a clean tree; 0 means unknown.
+if [ -z "$(git -C "$REPO" status --porcelain)" ]; then
+	GIT_HASH=$(git -C "$REPO" rev-parse --short=8 HEAD)
+else
+	GIT_HASH=00000000
+	echo "sprig_build: working tree has changes, firmware_build will be 0x00000000"
+fi
+
+rm -rf "$OUT"
+mkdir -p "$OUT"
+
+# Tracked and untracked-but-not-ignored files, minus tracked files deleted from disk.
+LIST="$OUT/.files"
+git -C "$REPO" ls-files --cached --others --exclude-standard > "$LIST.all"
+git -C "$REPO" ls-files --deleted > "$LIST.deleted"
+grep -vxFf "$LIST.deleted" "$LIST.all" > "$LIST" || true
+(cd "$REPO" && tar -cf - -T "$LIST") | tar -xf - -C "$OUT"
+rm -f "$LIST" "$LIST.all" "$LIST.deleted"
+
+# POSIX sh has no pipefail, so the container's exit status travels through a file.
+STATUS="$OUT/.status"
+{
+	podman run --rm --name "sprig-ennoid-build-$$" \
+		--userns=keep-id --user="$(id -u):$(id -g)" \
+		--cap-drop=ALL --security-opt=no-new-privileges --network=none \
+		--cpus="$CPUS" --memory="$MEMORY" --pids-limit=512 \
+		-e HOME=/tmp --workdir=/build -v "$OUT:/build:rw" \
+		"$IMAGE" \
+		sh -c 'make -j"$1" build_args="-D $2=1" GIT_HASH="$3" && arm-none-eabi-size main.elf && make test' \
+		sh "$CPUS" "$BOARD" "$GIT_HASH" 2>&1 && code=0 || code=$?
+	echo "$code" > "$STATUS"
+} | tee "$OUT/build.log"
+
+CODE=$(cat "$STATUS")
+rm -f "$STATUS"
+echo "sprig_build: exit $CODE, output in $OUT"
+exit "$CODE"
