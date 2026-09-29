@@ -316,21 +316,21 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->BMSApplication					= electricVehicle;
 
 #elif ENNOID_HV
-	configLocation->noOfCellsSeries					= 12;					// Total number of cells in series in the battery pack
-	configLocation->noOfCellsParallel                              	= 10;                      		// Number of cells in parallel
+	configLocation->noOfCellsSeries					= 99;					// Total number of cells in series in the battery pack (Sprig D15: 9 x MaxAmps 11S)
+	configLocation->noOfCellsParallel                              	= 1;                      		// Number of cells in parallel (Sprig D15: 99S1P)
 	configLocation->noOfParallelModules                       	= 1;                     		// Number of parallel modules
-	configLocation->batteryCapacity					= 22.00f;				// XXAh battery
+	configLocation->batteryCapacity					= 5.20f;				// XXAh battery (MaxAmps 5200 mAh, 1P)
 	configLocation->cellHardUnderVoltage				= 3.00f;				// Worst case X.XXV as lowest cell voltage (Sprig D8: pack 3.0 V/cell min)
-	configLocation->cellHardOverVoltage				= 4.20f;				// Worst case X.XXV as highest cell voltage (Sprig: MaxAmps maximum; at 99S the 400 V pack limit trips first)
+	configLocation->cellHardOverVoltage				= 4.15f;				// Worst case X.XXV as highest cell voltage (Sprig D15: below the MaxAmps 4.20 V maximum)
 	configLocation->cellLCSoftUnderVoltage				= 3.50f;				// Lowest cell voltage X.XXV. (Sprig D8)
 	configLocation->cellSoftOverVoltage				= 4.00f;				// Normal highest cell voltage X.XXV. (Sprig: charge target, 99S x 4.00 V = 396 V)
 	configLocation->cellBalanceDifferenceThreshold                 	= 0.01f;				// Start balancing @ XmV difference, stop if below.
 	configLocation->cellBalanceStart				= 3.95f;				// Start balancing above X.XXV. (Sprig: below the 4.00 V charge target)
 	configLocation->cellBalanceAllTime				= false;				// Enable balancing under all opstate
 	configLocation->cellThrottleUpperStart				= 0.03f;				// Upper range of cell voltage for charge throttling.
-	configLocation->cellThrottleLowerStart				= 0.20f;				// Lower range of cell voltage for discharge throttling.
+	configLocation->cellThrottleLowerStart				= 0.10f;				// Lower range of cell voltage for discharge throttling. (Sprig: full limit from 3.60 V)
 	configLocation->cellThrottleUpperMargin				= 0.01f;				// Margin of throttle from upper soft limits.
-	configLocation->cellThrottleLowerMargin				= 0.50f;				// Margin of throttle from lower soft limits.	
+	configLocation->cellThrottleLowerMargin				= 0.00f;				// Margin of throttle from lower soft limits. (Sprig: 5 % floor at the 3.50 V landing voltage)
 	configLocation->packVoltageDataSource                          	= sourcePackVoltageISL28022; 		// Packvoltage source.
 	configLocation->packCurrentDataSource                          	= sourcePackCurrentISL28022; 		// The pack current is the same as the current through the low current shunt
 	configLocation->buzzerSignalSource                             	= buzzerSourceOn;         		// Stores what source shoud be taken to trigger
@@ -404,15 +404,15 @@ void modConfigLoadDefaultConfig(modConfigGeneralConfigStructTypedef *configLocat
 	configLocation->NTCBetaFactor[modConfigNTCGroupLTCExt]         	= 4250;                   		// NTC Beta factor
 	configLocation->NTCBetaFactor[modConfigNTCGroupMasterPCB]      	= 4250;                   		// NTC Beta factor
 	configLocation->NTCBetaFactor[modConfigNTCGroupExp]		= 4250;                  		// NTC Beta factor
-	configLocation->cellMonitorType                                	= CELL_MON_LTC6811_1;     		// Use the new cell voltage monitor
-	configLocation->cellMonitorICCount                             	= 1;                      		// Only one slave IC
+	configLocation->cellMonitorType                                	= CELL_MON_LTC6813_1;     		// Use the new cell voltage monitor (Sprig D6: LTC6813 slaves)
+	configLocation->cellMonitorICCount                             	= 9;                      		// Sprig D15: one LTC6813 slave per 11S pack
 	configLocation->externalEnableOperationalState                 	= opStateExtNormal;       		// Go to normal enable mode
 	configLocation->chargeEnableOperationalState                   	= opStateChargingModeCharging;		// Go to charging mode when a charger is connected
 	configLocation->powerDownDelay                                 	= 3000;                   		// Wait only minimal to turn off
 	
-	configLocation->noOfCellsPerModule                             	= 12;                      		// Number of cell levels monitored per LTC68XX	
-	configLocation->lastICNoOfCells					= 0;
-	configLocation->lastICMask					= 0;
+	configLocation->noOfCellsPerModule                             	= 11;                      		// Number of cell levels monitored per LTC68XX (99S / 9 slaves)
+	configLocation->lastICNoOfCells					= 11;
+	configLocation->lastICMask					= 0x7FF;
 	configLocation->humidityICType 					= 0;
 	configLocation->BMSApplication					= electricVehicle;
 
