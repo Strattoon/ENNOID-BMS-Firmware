@@ -1,7 +1,10 @@
+#ifndef __DRIVERHWI2C2_H
+#define __DRIVERHWI2C2_H
+
 #include "stm32f3xx_hal.h"
 #include "stdbool.h"
 
-#define NoOfI2C2Ports				3
+#define NoOfI2C2Ports				2
 
 typedef struct {
 	GPIO_TypeDef* Port;
@@ -15,3 +18,5 @@ typedef struct {
 void driverHWI2C2Init(void);
 bool driverHWI2C2Write(uint16_t DevAddress, bool readWrite, uint8_t *pData, uint16_t Size);
 bool driverHWI2C2Read(uint16_t DevAddress, uint8_t *pData, uint16_t Size);
+
+#endif

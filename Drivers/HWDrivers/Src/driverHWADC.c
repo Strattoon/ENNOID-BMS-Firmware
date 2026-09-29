@@ -7,11 +7,8 @@ ADC_HandleTypeDef hadc1;
 const driverHWADCPortStruct driverHWADCPorts[NoOfADCPorts] = 								// Hold all I2C pin configuration data
 {
 	{GPIOA,RCC_AHBENR_GPIOAEN,GPIO_PIN_1,GPIO_MODE_ANALOG,GPIO_NOPULL,0x00},	// LoadVoltageSense analog pin
-#ifdef HWVersion_0_4	
-	{GPIOA,RCC_AHBENR_GPIOAEN,GPIO_PIN_0,GPIO_MODE_ANALOG,GPIO_PULLUP,0x00}		// NTC analog pin
-#else  																																			// Any other previous version
-	{GPIOA,RCC_AHBENR_GPIOCEN,GPIO_PIN_0,GPIO_MODE_INPUT,GPIO_PULLUP,0x00}		// P_STAT_CHARGE_DETECT
-#endif
+	{GPIOA,RCC_AHBENR_GPIOAEN,GPIO_PIN_0,GPIO_MODE_ANALOG,GPIO_PULLUP,0x00}		// ChargeVoltage analog pin
+
 };
 
 void driverHWADCInit(void) {
@@ -58,7 +55,7 @@ void driverHWADCSetInputChannel(ADC_HandleTypeDef* hadc, uint32_t inputChannel) 
   sConfig.Channel = inputChannel;
   sConfig.Rank = 1;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
-  sConfig.SamplingTime = ADC_SAMPLETIME_181CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_601CYCLES_5;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
   if (HAL_ADC_ConfigChannel(hadc, &sConfig) != HAL_OK)
@@ -67,7 +64,7 @@ void driverHWADCSetInputChannel(ADC_HandleTypeDef* hadc, uint32_t inputChannel) 
   }
 }
 
-bool driverHWADCGetLoadVoltage(float *loCurrentLoadVoltage) {
+bool driverHWADCGetLoadVoltage(float *loCurrentLoadVoltage, float offset, float scalar) {
 	uint32_t driverHWADCAverageSum = 0;
 	uint8_t	driverHWADCAverageCount = 0;
 	
@@ -82,7 +79,27 @@ bool driverHWADCGetLoadVoltage(float *loCurrentLoadVoltage) {
 	};
 	
 	uint16_t temp = driverHWADCAverageSum/NoOfAverages;
-	*loCurrentLoadVoltage = temp*(3.3f/4096*17.4f);
+	*loCurrentLoadVoltage = temp*(3.3f/4096*scalar)+offset;
+
+	return false;
+};
+
+bool driverHWADCGetChargerVoltage(float *chargerVoltage, float offset, float scalar) {
+	uint32_t driverHWADCAverageSum = 0;
+	uint8_t	driverHWADCAverageCount = 0;
+	
+	driverHWADCSetInputChannel(&hadc1,ADC_CHANNEL_1);
+
+	driverHWADCAverageSum = 0;
+	for(driverHWADCAverageCount = 0; driverHWADCAverageCount < NoOfAverages; driverHWADCAverageCount++) {
+		HAL_ADC_Start(&hadc1);
+		if (HAL_ADC_PollForConversion(&hadc1, 1) == HAL_OK) {
+			driverHWADCAverageSum += HAL_ADC_GetValue(&hadc1);
+		};
+	};
+	
+	uint16_t temp = driverHWADCAverageSum/NoOfAverages;
+	*chargerVoltage = temp*(3.3f/4096*scalar)+offset;
 
 	return false;
 };
@@ -92,7 +109,6 @@ bool driverHWADCGetNTCValue(float *ntcValue, uint32_t ntcNominal, uint32_t ntcSe
 	uint8_t	 driverHWADCAverageCount;
 	uint16_t driverHWADCAverage;
 	
-#ifdef HWVersion_0_4
 	driverHWADCSetInputChannel(&hadc1,ADC_CHANNEL_1);
 
 	driverHWADCAverageSum = 0;
@@ -116,9 +132,7 @@ bool driverHWADCGetNTCValue(float *ntcValue, uint32_t ntcNominal, uint32_t ntcSe
   steinhart += 1.0f / (ntcNominalTemp + 273.15f);       // + (1/To)
   steinhart = 1.0f / steinhart;                         // Invert
   *ntcValue = steinhart - 273.15f;                      // convert to degree
-#else
-	*ntcValue = 0.0f;
-#endif
+
 
 	return false;
 };

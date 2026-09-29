@@ -22,6 +22,16 @@ void modEffectChangeState(STATIDTypedef id, STATStateTypedef NewState) {
 	}
 }
 
+void modEffectChangeStateError(STATIDTypedef id, STATStateTypedef NewState, uint8_t errorCode) {
+	static uint32_t error = 0;
+	
+	if(STATStatuses[id].State != NewState || error != errorCode) {
+		STATStatuses[id].State = NewState;
+		STATStatuses[id].Count = (uint32_t)errorCode;
+		error = errorCode;
+	}
+}
+
 void modEffectTask(void) {
 	uint32_t LEDPointer;
 	
@@ -52,7 +62,10 @@ void modEffectTask(void) {
 				break;
 			case STAT_BLINKSHORTLONG_1000_4:
 				driverHWSetOutput((STATIDTypedef)LEDPointer,modEffectTaskBlinkShortLong(1000,4));
-				break;			
+				break;
+			case STAT_ERROR:
+				driverHWSetOutput((STATIDTypedef)LEDPointer,modEffectTaskError(200,1,LEDPointer));
+				break;				
 			default:
 				break;
 		}
@@ -153,6 +166,32 @@ STATStateTypedef modEffectTaskBlinkShortLong(uint32_t blinkTimeShort, uint32_t b
 			LEDOnState = STAT_SET;
 			lastTick = HAL_GetTick();
 		}
+	}
+	
+	return LEDOnState;
+}
+
+STATStateTypedef modEffectTaskError(uint32_t blinkTimeShort, uint32_t blinkRatio, uint32_t LEDPointer) {
+	static uint32_t lastTick;
+	static STATStateTypedef LEDOnState = STAT_RESET;
+	static uint8_t errorCounter = 0;
+	
+	if(LEDOnState) {
+		if(modDelayTick1ms(&lastTick,blinkTimeShort)) {
+			LEDOnState = STAT_RESET;
+			errorCounter++;
+		}
+	}else{
+			if(errorCounter >= STATStatuses[LEDPointer].Count){
+				if(modDelayTick1ms(&lastTick,blinkTimeShort*blinkRatio*5)) {
+					LEDOnState = STAT_SET;
+					errorCounter = 0;
+				}
+			}else{
+				if(modDelayTick1ms(&lastTick,blinkTimeShort*blinkRatio)) {
+					LEDOnState = STAT_SET;				
+				}
+			}
 	}
 	
 	return LEDOnState;

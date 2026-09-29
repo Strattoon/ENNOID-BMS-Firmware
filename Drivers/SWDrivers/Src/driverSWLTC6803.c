@@ -7,7 +7,7 @@ void driverSWLTC6803Init(driverLTC6803ConfigStructTypedef configStruct, uint8_t 
 	driverSWLTC6803TotalNumerOfICs = totalNumberOfLTCs;
 	driverSWLTC6803ConfigStruct = configStruct;
 	
-	driverHWSPI1Init(LTC_CS_GPIO_Port,LTC_CS_Pin);
+	driverHWSPI1Init(LTC6803_CS_GPIO_Port,LTC6803_CS_Pin);
 	
 	driverSWLTC6803WriteConfig(driverSWLTC6803ConfigStruct);
 };
@@ -24,6 +24,10 @@ void driverSWLTC6803StartCellVoltageConversion(void) {
 	driverSWLTC6803SendCommand((driverSWLTC6803Registers)driverSWLTC6803ConfigStruct.CellVoltageConversionMode);
 };
 
+void driverSWLTC6803StartLoadedCellVoltageConversion(void) {
+	driverSWLTC6803SendCommand(LTC6803StartOpenWireADCConversionAll);
+};
+
 void driverSWLTC6803StartTemperatureVoltageConversion(void) {
 	driverSWLTC6803SendCommand(LTC6803StartTemperatureADCConversionAll);
 };
@@ -32,7 +36,7 @@ void driverSWLTC6803ResetCellVoltageRegisters(void) {
 	driverSWLTC6803SendCommand(LTC6803StartCellVoltageADCConversionClear);
 };
 
-bool driverSWLTC6803ReadCellVoltages(driverLTC6803CellsTypedef cellVoltages[12]) {
+bool driverSWLTC6803ReadCellVoltages(cellMonitorCellsTypeDef cellVoltages[12]) {
 	uint16_t cellRegisters[12]; 
   int data_counter = 0;
   bool dataValid = true;
@@ -63,12 +67,14 @@ bool driverSWLTC6803ReadCellVoltages(driverLTC6803CellsTypedef cellVoltages[12])
 		cellRegisters[k] = temp + temp2 -512;
 		temp2 = (rx_data[data_counter++])>>4;
 		temp =  (rx_data[data_counter++])<<4;
+		if((temp+temp2) >= 4000)
+			dataValid = false;                                          // Conversion not finished
 		cellRegisters[k+1] = temp+temp2 -512;
 	}
 	
 	if(dataValid){
 		for(uint8_t j=0; j<12 ; j++) {		
-			if(cellRegisters[j]*0.0015 < 5.0f)
+			if(cellRegisters[j]*0.0015 < 6.0f)
 				cellVoltages[j].cellVoltage = cellRegisters[j]*0.0015;
 			else
 				dataValid = false;
@@ -255,7 +261,7 @@ bool driverSWLTC6803ReadFlagRegisters(uint8_t total_ic, uint8_t flagRegisters[][
   return pec_error;
 };
 
-bool driverSWLTC6803ReadVoltageFlags(uint16_t *underVoltageFlags, uint16_t *overVoltageFlags) {
+bool driverSWLTC6803ReadVoltageFlags(uint32_t *underVoltageFlags, uint32_t *overVoltageFlags) {
 	bool returnVal = false;
 	uint8_t flagRegisters[1][4];
 	uint32_t registersCombined;
@@ -269,7 +275,7 @@ bool driverSWLTC6803ReadVoltageFlags(uint16_t *underVoltageFlags, uint16_t *over
 	registersCombinedTemp = registersCombined & 0x00555555;																							// Filter out only the undervoltage bits
 	
 	for(int bitPointer = 0; bitPointer < driverSWLTC6803ConfigStruct.noOfCells; bitPointer++)
-		*underVoltageFlags |= (registersCombinedTemp & (1 << bitPointer*2)) ? (1 << bitPointer) : 0;			// Shift undervoltage bits closer together and stote them in *underVoltageFlags
+		*underVoltageFlags |= (registersCombinedTemp & (1 << bitPointer*2)) ? (1 << bitPointer) : 0;			// Shift undervoltage bits closer together and store them in *underVoltageFlags
 	
 	registersCombinedTemp = registersCombined & 0x00AAAAAA;																							// Filter out only the overvoltage bits
 	registersCombinedTemp = registersCombinedTemp >> 1;																									// Move everything one bit to the right
@@ -280,7 +286,7 @@ bool driverSWLTC6803ReadVoltageFlags(uint16_t *underVoltageFlags, uint16_t *over
 	return returnVal;
 };
 
-void driverSWLTC6803EnableBalanceResistors(uint16_t balanceEnableMask) {
+void driverSWLTC6803EnableBalanceResistors(uint32_t balanceEnableMask) {
 	driverSWLTC6803ConfigStruct.DisChargeEnableMask = balanceEnableMask;
 	driverSWLTC6803WriteConfig(driverSWLTC6803ConfigStruct);
 };
@@ -311,12 +317,12 @@ void driverSWLTC6803SendCommand(driverSWLTC6803Registers command) {
 
 // Coupling of drivers
 void driverSWLTC6803Write(uint8_t *writeBytes, uint8_t writeLength) {
-	driverHWSPI1Write(writeBytes,writeLength,LTC_CS_GPIO_Port,LTC_CS_Pin);
+	driverHWSPI1Write(writeBytes,writeLength,LTC6803_CS_GPIO_Port,LTC6803_CS_Pin);
 };
 
 // Coupling of drivers
 void driverSWLTC6803WriteRead(uint8_t *writeBytes, uint8_t writeLength, uint8_t *readBytes, uint8_t readLength) {
-	driverHWSPI1WriteRead(writeBytes,writeLength,readBytes,readLength,LTC_CS_GPIO_Port,LTC_CS_Pin);
+	driverHWSPI1WriteRead(writeBytes,writeLength,readBytes,readLength,LTC6803_CS_GPIO_Port,LTC6803_CS_Pin);
 };
 
 float driverSWLTC6803ConvertTemperatureExt(uint16_t inputValue,uint32_t ntcNominal,uint32_t ntcSeriesResistance,uint16_t ntcBetaFactor, float ntcNominalTemp) {

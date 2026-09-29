@@ -1,3 +1,23 @@
+/*
+	Copyright 2017 - 2018 Danny Bokma	danny@diebie.nl
+	Copyright 2019 - 2020 Kevin Dionne	kevin.dionne@ennoid.me
+
+	This file is part of the DieBieMS/ENNOID-BMS firmware.
+
+	The DieBieMS/ENNOID-BMS firmware is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    The DieBieMS/ENNOID-BMS firmware is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
 #include "modPowerState.h"
 
 modConfigGeneralConfigStructTypedef *modPowerStateGeneralConfigHandle;
@@ -7,23 +27,29 @@ bool modPowerStateForceOnDesired;
 bool modPowerStateButtonPressedVar;
 bool modPowerStateLastButtonPressedVar;
 bool modPowerStateLastButtonFirstPress;
+bool modPowerStateButtonActuated;
 bool modPowerStateButtonPulsToggleMode;
 bool modPowerStatePowerModeDirectHCDelay;
+bool modPowerStateLongStartupButtonPress;
 uint32_t modPowerStateButtonPressedDuration;
 uint32_t modPowerStateButtonPressedTimeStamp;
 uint32_t modPowerStateStartupDelay;
 uint32_t modPowerStatePowerDownTimeout;
 
+bool tempButtonPressed;
+
 void modPowerStateInit(PowerStateStateTypedef desiredPowerState) {
-	uint32_t startupDelay = HAL_GetTick();
+	//uint32_t startupDelay = HAL_GetTick();
 	modPowerStateStartupDelay = HAL_GetTick();
 	modPowerStatePowerDownTimeout = HAL_GetTick();
 	modPowerStatePulsePowerDownDesired = false;
 	modPowerStateForceOnDesired  = false;
 	modPowerStateButtonPressedVar = true;
+	modPowerStateLongStartupButtonPress = false;
 	modPowerStateButtonPulsToggleMode = true;
 	modPowerStateButtonPressedDuration = 0;
 	modPowerStateButtonPressedTimeStamp = 0;
+	modPowerStateButtonActuated = false;
 	
 	driverHWPowerStateInit();
 	
@@ -47,36 +73,43 @@ void modPowerStateSetConfigHandle(modConfigGeneralConfigStructTypedef *generalCo
 }
 
 void modPowerStateTask(void) {
-	bool tempButtonPressed = driverHWPowerStateReadInput(P_STAT_BUTTON_INPUT);
+	//bool tempButtonPressed = driverHWPowerStateReadInput(P_STAT_BUTTON_INPUT);
+	tempButtonPressed = driverHWPowerStateReadInput(P_STAT_BUTTON_INPUT);
 	
 	if(modPowerStateLastButtonPressedVar != tempButtonPressed) {
 		if(modPowerStateLastButtonPressedVar){ 																	// If is was high and now low (actuated)
 			modPowerStateLastButtonFirstPress = false;
+			modPowerStateButtonActuated = true;
 		}else{ 																																	// If is was low and now high (non actuated)
 			modPowerStateButtonPressedTimeStamp = HAL_GetTick();
+			modPowerStateButtonActuated = false;
 		}
 		modPowerStateLastButtonPressedVar = tempButtonPressed;
 	}
 	
 	if(tempButtonPressed) {
 		modPowerStateButtonPressedDuration = HAL_GetTick() - modPowerStateButtonPressedTimeStamp;
+		
+		if((modPowerStateButtonPressedDuration > POWERBUTTON_DEBOUNCE_TIME) && (modPowerStateLastButtonFirstPress == false))
+			modPowerStateButtonPressedVar = true;
 	
 		if((modPowerStateButtonPressedDuration >= POWERBUTTON_POWERDOWN_THRESHOLD_TIME) && (modPowerStateLastButtonFirstPress == false) && modPowerStateGeneralConfigHandle->pulseToggleButton) {
 			modPowerStatePulsePowerDownDesired = true;
 			modPowerStateButtonPressedDuration = 0;
 		}
 		
-		if((modPowerStateButtonPressedDuration >= POWERBUTTON_FORCEON_THRESHOLD_TIME) && (modPowerStateLastButtonFirstPress == true) && modPowerStateGeneralConfigHandle->allowForceOn && modPowerStateGeneralConfigHandle->pulseToggleButton) {
-			modPowerStateForceOnDesired = true;
+		if((modPowerStateButtonPressedDuration >= POWERBUTTON_FORCEON_THRESHOLD_TIME) && (modPowerStateLastButtonFirstPress == true) && modPowerStateGeneralConfigHandle->pulseToggleButton) {
+			if(modPowerStateGeneralConfigHandle->allowForceOn) {
+				modPowerStateForceOnDesired = true;
+			}
+			
+			modPowerStateLongStartupButtonPress = true;
 			modPowerStateButtonPressedDuration = 0;
 		}
 		
-		if((modPowerStateButtonPressedDuration > POWERBUTTON_DEBOUNCE_TIME) && (modPowerStateLastButtonFirstPress == false))
-			modPowerStateButtonPressedVar = true;
-		
 		modPowerStatePowerDownTimeout = HAL_GetTick();
 	}else{
-		if(modDelayTick1ms(&modPowerStatePowerDownTimeout,500))
+		if(modDelayTick1ms(&modPowerStatePowerDownTimeout,500) && modPowerStateButtonActuated)
 			modPowerStateButtonPressedVar = false;
 	}
 };
@@ -97,13 +130,8 @@ bool modPowerStatePowerdownRequest(void) {
 	if(modPowerStateGeneralConfigHandle->pulseToggleButton){
 		returnValue = modPowerStatePulsePowerDownDesired;
 	}else{
-		if(modPowerStateGeneralConfigHandle->togglePowerModeDirectHCDelay){
 			returnValue = !modPowerStateButtonPressedVar;
-		}else{
-			returnValue = false;
 		}
-	}
-	
 	return returnValue;
 };
 
@@ -126,3 +154,7 @@ void modPowerStateSetState(PowerStateStateTypedef newState) {
 bool modPowerStateButtonPressedOnTurnon(void) {
 	return modPowerStateLastButtonFirstPress;
 };
+
+bool modPowerStateGetLongButtonPressState(void) {
+  return modPowerStateLongStartupButtonPress;
+}

@@ -1,6 +1,7 @@
 #include "driverHWSPI1.h"
 #include "stdlib.h"
 #include "math.h"
+#include "mainDataTypes.h"
 
 #define PEC_POLY 												0x07
 #define PEC_SEED 												0x41
@@ -83,17 +84,12 @@ typedef enum {
 } driverSWLTC6803Registers;
 
 typedef struct {
-	float cellVoltage;
-	uint8_t cellNumber;
-} driverLTC6803CellsTypedef;
-
-typedef struct {
 	bool WatchDogFlag;																																			// Read the watchdog timer io pin, this pin is open drain and internally controlled by HW 0=WDT timeout
 	bool GPIO1;																																							// Read/Write opendrain GPIO0
 	bool GPIO2;																																							// Read/Write opendrain GPIO1
 	bool LevelPolling;																																			// Look at page 20 of 680324fa.pdf (LTC6803-2 datasheet), for now make this bit high by default.
 	uint8_t CDCMode;																																				// Comparator Duty cycle mode
-	uint16_t DisChargeEnableMask;																														// Set enable state of discharge, 1=EnableDischarge, 0=DisableDischarge
+	uint32_t DisChargeEnableMask;																														// Set enable state of discharge, 1=EnableDischarge, 0=DisableDischarge
 	uint8_t noOfCells;																																			// Number of cells to monitor (that can cause interrupt)
 	uint8_t CellVoltageConversionMode;																											// Cell voltage conversion mode
 	float CellUnderVoltageLimit;																														// Undervoltage level, cell voltages under this limit will cause interrupt
@@ -104,17 +100,18 @@ void driverSWLTC6803Init(driverLTC6803ConfigStructTypedef configStruct, uint8_t 
 void driverSWLTC6803ReInit(void);
 void driverSWLTC6803ReadInit(driverLTC6803ConfigStructTypedef *configStruct, uint8_t totalNumberOfLTCs);
 void driverSWLTC6803StartCellVoltageConversion(void);
+void driverSWLTC6803StartLoadedCellVoltageConversion(void);
 void driverSWLTC6803StartTemperatureVoltageConversion(void);
 void driverSWLTC6803ResetCellVoltageRegisters(void);
-bool driverSWLTC6803ReadCellVoltages(driverLTC6803CellsTypedef cellVoltages[12]);
+bool driverSWLTC6803ReadCellVoltages(cellMonitorCellsTypeDef cellVoltages[12]);
 bool driverSWLTC6803ReadTempVoltages(uint16_t tempVoltages[3]);
 void driverSWLTC6803WriteConfigRegisters(uint8_t total_ic, uint8_t config[][6]);
 void driverSWLTC6803WriteConfig(driverLTC6803ConfigStructTypedef configStruct);
 bool driverSWLTC6803ReadConfigRegisters(uint8_t total_ic, uint8_t r_config[][7]);
 bool driverSWLTC6803ReadConfig(driverLTC6803ConfigStructTypedef *configStruct);
 bool driverSWLTC6803ReadFlagRegisters(uint8_t total_ic, uint8_t flagRegisters[][4]);
-bool driverSWLTC6803ReadVoltageFlags(uint16_t *underVoltageFlags, uint16_t *overVoltageFlags);
-void driverSWLTC6803EnableBalanceResistors(uint16_t balanceEnableMask);
+bool driverSWLTC6803ReadVoltageFlags(uint32_t *underVoltageFlags, uint32_t *overVoltageFlags);
+void driverSWLTC6803EnableBalanceResistors(uint32_t balanceEnableMask);
 
 // Calculating CRC for communication
 uint8_t driverSWLTC6803CalcPEC(uint8_t len, uint8_t *data	);

@@ -13,7 +13,7 @@
 extern const uint8_t libLogos[NoOfLogos][LOGO_HEIGHT * LOGO_WIDTH / 8];
 
 typedef enum {
-	LOGO_DIEBIE = 0,
+	LOGO_ENNOID = 0,
 	LOGO_CHARGING,
 	LOGO_LOAD,
 	LOGO_BATTERY_DEAD,

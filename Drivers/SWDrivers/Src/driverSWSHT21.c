@@ -14,6 +14,7 @@ void driverSWSHT21Init(void) {
 	
 	driverSWSHT21LastTemperature = 0.0f;
 	driverSWSHT21LastHumidity = 0.0f;
+	
 }
 
 void driverSWSHT21StartMeasurement(driverSWSHT21MeasureType measureType) {
@@ -25,11 +26,11 @@ void driverSWSHT21StartMeasurement(driverSWSHT21MeasureType measureType) {
 		switch(measureType){
 			case TEMP:
 				commandBytes[0] = DRIVERSHT21_TRIGGER_T_MEASUREMENT_NHM;										// start a no hold master Temperature conversion
-				driverHWI2C1Write(DRIVERSHT21_ADDR,false,commandBytes,sizeof(commandBytes));
+				driverHWI2C2Write(DRIVERSHT21_ADDR,false,commandBytes,sizeof(commandBytes));
 				break;
 			case HUMIDITY:
 				commandBytes[0] = DRIVERSHT21_TRIGGER_RH_MEASUREMENT_NHM;										// start a no hold master Humidity conversion
-				driverHWI2C1Write(DRIVERSHT21_ADDR,false,commandBytes,sizeof(commandBytes));
+				driverHWI2C2Write(DRIVERSHT21_ADDR,false,commandBytes,sizeof(commandBytes));
 				break;
 			default:
 				// No action
@@ -46,7 +47,7 @@ bool driverSWSHT21PollMeasureReady(void) {
 	bool returnValue = false;
 	
 	if(driverSWSHT21LastMeasureType != NONE) {																				// Check wether there is a conversion in progress
-		if(driverHWI2C1Read(DRIVERSHT21_ADDR,returnedData,3) == HAL_OK){								// Try to read data from sensor
+		if(driverHWI2C2Read(DRIVERSHT21_ADDR,returnedData,3) == HAL_OK){								// Try to read data from sensor
 			if(driverSWSHT21CalculateCRC(returnedData,2,returnedData[2])){								// When read is a succes check checksum
 				returnedSensorValue = (returnedData[0] << 8) | returnedData[1];							// Compose ADC value
 				

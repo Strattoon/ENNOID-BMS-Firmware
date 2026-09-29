@@ -1,3 +1,23 @@
+/*
+	Copyright 2017 - 2018 Danny Bokma	danny@diebie.nl
+	Copyright 2019 - 2020 Kevin Dionne	kevin.dionne@ennoid.me
+
+	This file is part of the DieBieMS/ENNOID-BMS firmware.
+
+	The DieBieMS/ENNOID-BMS firmware is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    The DieBieMS/ENNOID-BMS firmware is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
 #include "generalDefines.h"
 #include "stm32f3xx_hal.h"
 #include "modEffect.h"
@@ -5,14 +25,16 @@
 #include "modOperationalState.h"
 #include "modDelay.h"
 #include "modPowerElectronics.h"
-#include "modHiAmp.h"
 #include "modConfig.h"
 #include "modStateOfCharge.h"
 #include "driverSWStorageManager.h"
 #include "modUART.h"
 #include "mainDataTypes.h"
 #include "modCAN.h"
-#include "modHiAmp.h"
+#include "modSprig.h"
+
+//#include "safety_check.h"
+//#include "report_status.h"
 
 // This next define enables / disables the watchdog
 //#define AllowDebug
@@ -20,7 +42,7 @@
 IWDG_HandleTypeDef handleIWDG;
 modConfigGeneralConfigStructTypedef *generalConfig;
 modStateOfChargeStructTypeDef       *generalStateOfCharge;
-modPowerElectricsPackStateTypedef   packState;
+modPowerElectronicsPackStateTypedef packState;
 
 void SystemClock_Config(void);
 void mainWatchDogInitAndStart(void);
@@ -32,6 +54,7 @@ int main(void) {
   SystemClock_Config();
 	modPowerStateInit(P_STAT_SET);																						// Enable power supply to keep operational
 	mainWatchDogInitAndStart();
+	
 	// All following functions should be called in exactly this order
 	generalConfig            = modConfigInit();																// Tell EEPROM the needed size for ConfigStruct
 	generalStateOfCharge     = modStateOfChargeInit(&packState,generalConfig);// Tell EEPROM the needed size for StatOfChargeStruct
@@ -44,27 +67,31 @@ int main(void) {
 	modCommandsInit(&packState,generalConfig);
 	modUARTInit();																	  												// Will act on UART message requests
 	modCANInit(&packState,generalConfig);																			// Will act on CAN message requests
+	modSprigInit(&packState,generalConfig);																		// Sprig BMS CAN v1: DTI watch, input expander, relay supervisor
 	modEffectInit();																													// Controls the effects on LEDs + buzzer
-	modEffectChangeState(STAT_LED_DEBUG,STAT_FLASH);													// Set Debug LED to blinking mode
-	modPowerElectronicsInit(&packState,generalConfig);												// Will measure all voltages and store them in packState
+	modEffectChangeState(STAT_LED_DEBUG,STAT_FLASH);													// Set Debug LED to blinking mode	
+	modPowerElectronicsInit(&packState,generalConfig);												// Will measure all voltages and store them in packState	
 	modOperationalStateInit(&packState,generalConfig,generalStateOfCharge);		// Will keep track of and control operational state (eg. normal use / charging / balancing / power down)
-	modHiAmpInit(&packState,generalConfig);																		// Initialize the HiAmp shield enviroment if any
-	
+  	
+	//safety_check_init(&packState, generalConfig);
+  	//report_status_init(&packState); 
+		
   while(true) {
 		modEffectTask();
 		modPowerStateTask();
 		modOperationalStateTask();
 		modUARTTask();
 		modCANTask();
-		modHiAmpTask();
 		mainWatchDogReset();
 		
 		if(modPowerElectronicsTask())																						// Handle power electronics task
-			modStateOfChargeProcess();																						// If there is new data handle SoC estimation
+			modStateOfChargeProcess();
+
+    //safety_check_task(); 
+    //report_status_task();																						// If there is new data handle SoC estimation
   }
 }
 
-/* System Clock Configuration */
 void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct;
   RCC_ClkInitTypeDef RCC_ClkInitStruct;
@@ -108,9 +135,9 @@ void SystemClock_Config(void) {
   HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
 }
 
-/* IWDG init function */
 void mainWatchDogInitAndStart(void) {
-#ifndef AllowDebug
+
+	#ifndef AllowDebug
   handleIWDG.Instance = IWDG;
   handleIWDG.Init.Prescaler = IWDG_PRESCALER_256;
   handleIWDG.Init.Window = 4095;
@@ -131,11 +158,6 @@ void mainWatchDogReset(void) {
 #endif
 }
 
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @param  None
-  * @retval None
-  */
 void Error_Handler(void){
   /* USER CODE BEGIN Error_Handler */
   /* User can add his own implementation to report the HAL error return state */
@@ -147,15 +169,7 @@ void Error_Handler(void){
 
 #ifdef USE_FULL_ASSERT
 
-/**
-   * @brief Reports the name of the source file and the source line number
-   * where the assert_param error has occurred.
-   * @param file: pointer to the source file name
-   * @param line: assert_param error line source number
-   * @retval None
-   */
-void assert_failed(uint8_t* file, uint32_t line)
-{
+void assert_failed(uint8_t* file, uint32_t line) {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */

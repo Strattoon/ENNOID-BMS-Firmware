@@ -1,45 +1,39 @@
 #include "driverSWPCAL6416.h"
 
-void driverSWPCAL6416Init(uint8_t DDR0, uint8_t DDR1,uint8_t PUER0,uint8_t PUER1,uint8_t PUDR0,uint8_t PUDR1){
-	driverHWI2C1Init();																																										// Init the I2C1 Bus
-	
-	// Init the CHIP
-	uint8_t configBytes[] = {0x02,0x00,0x00};																															// Reset all outputs to 0
-	driverHWI2C1Write(PCAL6461_ADDRES,false,configBytes,sizeof(configBytes));
-	
-	configBytes[0] = 0x06; 																																								// Config port0 - data direction register.
-	configBytes[1] = DDR0; 																																								// 1 = input, 0 = Ouput
-	configBytes[2] = DDR1;
-	driverHWI2C1Write(PCAL6461_ADDRES,false,configBytes,sizeof(configBytes));
-	
-	configBytes[0] = 0x46; 																																								// Pullup/down enable register port0.
-	configBytes[1] = PUER0; 																																							// 1 = enable, 0 = disable
-	configBytes[2] = PUER1;
-	driverHWI2C1Write(PCAL6461_ADDRES,false,configBytes,sizeof(configBytes));
-	
-	configBytes[0] = 0x48; 																																								// Pullup/down direction register port0.
-	configBytes[1] = PUDR0; 																																							// 1 = up, 0 = down
-	configBytes[2] = PUDR1;
-	driverHWI2C1Write(PCAL6461_ADDRES,false,configBytes,sizeof(configBytes));	
-};
+static bool driverSWPCAL6416WritePair(uint8_t address, uint8_t registerAddress, uint8_t port0, uint8_t port1) {
+	uint8_t data[2] = {port0, port1};																											// The register pointer auto-increments to port 1
+	return driverHWI2C1MemWrite(address, registerAddress, data, sizeof(data));
+}
 
-void driverSWPCAL6416SetOutput(uint8_t port, uint8_t pin, bool newState, bool writeToChip){
-	static uint8_t dataBytes[3] = {0x02,0x00,0x00};																												// Write to output register with init values 0/low
-	
-	if((port > 1) || (pin > 7))
-		return;
-	
-	if(newState)
-		dataBytes[port+1] |= (1<<pin);
-	else
-		dataBytes[port+1] &= ~(1<<pin);
-	
-	if(writeToChip) {
-		dataBytes[0] = 0x02;																																								// Make sure writing is done to the Output port register
-		driverHWI2C1Write(PCAL6461_ADDRES,false,dataBytes,sizeof(dataBytes));
-	}
-};
+bool driverSWPCAL6416Init(uint8_t address, uint8_t DDR0, uint8_t DDR1, uint8_t PUER0, uint8_t PUER1, uint8_t PUDR0, uint8_t PUDR1) {
+	bool ok = true;
 
-bool driverSWPCAL6416GetInput(uint8_t port, uint8_t pin, bool readFromChip){
-	return false;
-};
+	driverHWI2C1Init();																																					// No-op when the OLED already started the bus
+
+	ok &= driverSWPCAL6416WritePair(address, PCAL6416_REG_OUTPUT_PORT0, 0x00, 0x00);					// Outputs low before any pin is made an output
+	ok &= driverSWPCAL6416WritePair(address, PCAL6416_REG_PULL_SELECT_PORT0, PUDR0, PUDR1);		// Pull direction before enabling the pulls
+	ok &= driverSWPCAL6416WritePair(address, PCAL6416_REG_PULL_ENABLE_PORT0, PUER0, PUER1);
+	ok &= driverSWPCAL6416WritePair(address, PCAL6416_REG_CONFIG_PORT0, DDR0, DDR1);
+
+	return ok;
+}
+
+bool driverSWPCAL6416ReadInputs(uint8_t address, uint16_t *inputs) {
+	uint8_t data[2];
+
+	if(!driverHWI2C1MemRead(address, PCAL6416_REG_INPUT_PORT0, data, sizeof(data)))
+		return false;
+
+	*inputs = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+	return true;
+}
+
+bool driverSWPCAL6416ReadConfig(uint8_t address, uint8_t registerAddress, uint16_t *value) {
+	uint8_t data[2];
+
+	if(!driverHWI2C1MemRead(address, registerAddress, data, sizeof(data)))
+		return false;
+
+	*value = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+	return true;
+}

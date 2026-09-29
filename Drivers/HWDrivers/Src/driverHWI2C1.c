@@ -1,6 +1,7 @@
 #include "driverHWI2C1.h"
 
 I2C_HandleTypeDef driverHWI2C1;
+static bool driverHWI2C1Initialised = false;
 
 const I2C1PortStruct driverHWI2C1Ports[NoOfI2C1Ports] = 											// Hold all I2C pin configuration data
 {
@@ -11,6 +12,9 @@ const I2C1PortStruct driverHWI2C1Ports[NoOfI2C1Ports] = 											// Hold all I
 void driverHWI2C1Init(void) {
 	GPIO_InitTypeDef PortInitHolder;
 	uint8_t PortPointer;
+	
+	if(driverHWI2C1Initialised)																										// Shared by the OLED and the Sprig input expander
+		return;
 	
 	for(PortPointer = 0; PortPointer < NoOfI2C1Ports; PortPointer++) {
 		RCC->AHBENR |= driverHWI2C1Ports[PortPointer].ClkRegister;								// Enable clock de desired port
@@ -49,6 +53,22 @@ void driverHWI2C1Init(void) {
 			// Handle error state
 		};
   }
+	
+	driverHWI2C1Initialised = true;
+};
+
+void driverHWI2C1Recover(void) {
+	HAL_I2C_DeInit(&driverHWI2C1);
+	driverHWI2C1Initialised = false;
+	driverHWI2C1Init();
+};
+
+bool driverHWI2C1MemWrite(uint16_t DevAddress, uint8_t MemAddress, uint8_t *pData, uint16_t Size) {
+	return HAL_I2C_Mem_Write(&driverHWI2C1,DevAddress << 1,MemAddress,I2C_MEMADD_SIZE_8BIT,pData,Size,5) == HAL_OK;
+};
+
+bool driverHWI2C1MemRead(uint16_t DevAddress, uint8_t MemAddress, uint8_t *pData, uint16_t Size) {
+	return HAL_I2C_Mem_Read(&driverHWI2C1,DevAddress << 1,MemAddress,I2C_MEMADD_SIZE_8BIT,pData,Size,5) == HAL_OK;
 };
 
 bool driverHWI2C1Write(uint16_t DevAddress, bool readWrite, uint8_t *pData, uint16_t Size) {

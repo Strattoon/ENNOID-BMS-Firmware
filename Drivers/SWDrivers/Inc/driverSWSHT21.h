@@ -3,7 +3,8 @@
 
 #include "stdbool.h"
 #include "modDelay.h"
-#include "driverHWI2C1.h"
+#include "driverHWI2C2.h"
+
 
 #define DRIVERSHT21_ADDR   0x40
 #define DRIVERSHT21_TRIGGER_T_MEASUREMENT_HM 0XE3   // command trig. temp meas. hold master

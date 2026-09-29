@@ -1,0 +1,11 @@
+Vendored Sprig BMS CAN v1 test vectors (encoder side).
+
+File:    sprig-bms-can-v1-vectors.tsv
+From:    Sprig-Aerospace/Sprig-Flight-Director docs/architecture/sprig-bms-can-v1-vectors.tsv
+Commit:  99ca4b3 (Flight Director main)
+SHA-256: 3181ca0d08b887d06e26af0f2332331fef8a84091b1b55a7b8f201443541ee9d
+
+Rule (spec, "Test vectors"): the ENNOID encoder test must reproduce every "decoded" row byte for
+byte. Change the file in Flight Director, not this test code, and re-vendor it here in the same
+change: copy the file, update Commit and SHA-256 above, and regenerate
+sprig-bms-can-v1-vectors.tsv.sha256 (sha256sum format). "make test" checks the hash.

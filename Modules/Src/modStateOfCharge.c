@@ -1,14 +1,39 @@
+/*
+	Copyright 2017 - 2018 Danny Bokma	danny@diebie.nl
+	Copyright 2019 - 2020 Kevin Dionne	kevin.dionne@ennoid.me
+
+	This file is part of the DieBieMS/ENNOID-BMS firmware.
+
+	The DieBieMS/ENNOID-BMS firmware is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    The DieBieMS/ENNOID-BMS firmware is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
 #include "modStateOfCharge.h"
+#include "libSprigOcv.h"
+#include <math.h>
+
+#define SOC_OCV_SETTLE_MS 2000   // Let the first cell readings settle before trusting them as resting voltages
 
 modStateOfChargeStructTypeDef modStateOfChargeGeneralStateOfCharge;
-modPowerElectricsPackStateTypedef *modStateOfChargePackStatehandle;
+modPowerElectronicsPackStateTypedef *modStateOfChargePackStatehandle;
 modConfigGeneralConfigStructTypedef *modStateOfChargeGeneralConfigHandle;
 uint32_t modStateOfChargeLargeCoulombTick;
 uint32_t modStateOfChargeStoreSoCTick;
 
 bool modStateOfChargePowerDownSavedFlag = false;
+static bool modStateOfChargeOcvInitPending = false;       // Storage was empty: estimate SoC from the resting cell voltage
 
-modStateOfChargeStructTypeDef* modStateOfChargeInit(modPowerElectricsPackStateTypedef *packState, modConfigGeneralConfigStructTypedef *generalConfigPointer){
+modStateOfChargeStructTypeDef* modStateOfChargeInit(modPowerElectronicsPackStateTypedef *packState, modConfigGeneralConfigStructTypedef *generalConfigPointer){
 	modStateOfChargePackStatehandle = packState;
 	modStateOfChargeGeneralConfigHandle = generalConfigPointer;
 	driverSWStorageManagerStateOfChargeStructSize = (sizeof(modStateOfChargeStructTypeDef)/sizeof(uint16_t)); // Calculate the space needed for the config struct in EEPROM
@@ -19,10 +44,26 @@ modStateOfChargeStructTypeDef* modStateOfChargeInit(modPowerElectricsPackStateTy
 	return &modStateOfChargeGeneralStateOfCharge;
 };
 
+// First boot after flashing (or with empty storage): start from the resting cell voltage instead of
+// assuming a full pack. Waits for PEC-clean cell data while the pack is at rest.
+static void modStateOfChargeOcvInit(void) {
+	if(!modStateOfChargeOcvInitPending || HAL_GetTick() < SOC_OCV_SETTLE_MS || !modPowerElectronicsCellVoltagesKnown())
+		return;
+	if(fabsf(modStateOfChargePackStatehandle->packCurrent) >= modStateOfChargeGeneralConfigHandle->notUsedCurrentThreshold)
+		return;                                                                        // Not resting: an OCV estimate would be wrong
+	
+	modStateOfChargeGeneralStateOfCharge.remainingCapacityAh = modStateOfChargeGeneralConfigHandle->batteryCapacity *
+		libSprigOcvStateOfCharge(modStateOfChargePackStatehandle->cellVoltageAverage) / 100.0f;
+	modStateOfChargeOcvInitPending = false;
+	modStateOfChargeStoreStateOfCharge();
+}
+
 void modStateOfChargeProcess(void){
 	// Calculate accumulated energy
 	uint32_t dt = HAL_GetTick() - modStateOfChargeLargeCoulombTick;
 	modStateOfChargeStructTypeDef lastGeneralStateOfCharge;
+	
+	modStateOfChargeOcvInit();
 	
 	lastGeneralStateOfCharge = modStateOfChargeGeneralStateOfCharge;
 	
@@ -55,13 +96,14 @@ bool modStateOfChargeStoreAndLoadDefaultStateOfCharge(void){
 	if(driverSWStorageManagerStateOfChargeEmpty){
 		// TODO: SoC manager is empy -> Determin SoC from voltage when voltages are available.
 		modStateOfChargeStructTypeDef defaultStateOfCharge;
-		defaultStateOfCharge.generalStateOfCharge = 0.0f;
-		defaultStateOfCharge.generalStateOfHealth = 0.0f;
-		defaultStateOfCharge.remainingCapacityAh = 0.0f;
+		defaultStateOfCharge.generalStateOfCharge = 100.0f;
+		defaultStateOfCharge.generalStateOfHealth = 100.0f;
+		defaultStateOfCharge.remainingCapacityAh = modStateOfChargeGeneralConfigHandle->batteryCapacity;
 		defaultStateOfCharge.remainingCapacityWh = 0.0f;
 		
 		driverSWStorageManagerStateOfChargeEmpty = false;
 		driverSWStorageManagerStoreStruct(&defaultStateOfCharge,STORAGE_STATEOFCHARGE);
+		modStateOfChargeOcvInitPending = true;                                        // Replaced once resting cell voltages are known
 		// TODO_EEPROM
 	}
 	

@@ -1,14 +1,16 @@
 /*
-	Copyright 2016 - 2017 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 - 2018 Danny Bokma	danny@diebie.nl
+	Copyright 2019 - 2020 Kevin Dionne	kevin.dionne@ennoid.me
 
-	This file is part of the VESC firmware.
+	This file is part of the VESC/DieBieMS/ENNOID-BMS firmware.
 
-	The VESC firmware is free software: you can redistribute it and/or modify
+	The VESC/DieBieMS/ENNOID-BMS firmware is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
-    The VESC firmware is distributed in the hope that it will be useful,
+    The VESC/DieBieMS/ENNOID-BMS firmware is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
@@ -33,10 +35,10 @@ static int callback_write = 0;
 
 extern modConfigGeneralConfigStructTypedef *generalConfig;
 extern modStateOfChargeStructTypeDef *generalStateOfCharge;
-extern modPowerElectricsPackStateTypedef packState;
+extern modPowerElectronicsPackStateTypedef packState;
 extern OperationalStateTypedef modOperationalStateCurrentState;
 
-void terminal_process_string(char *str) {
+void modTerminalProcessString(char *str) {
 	enum { kMaxArgs = 64 };
 	int argc = 0;
 	char *argv[kMaxArgs];
@@ -59,10 +61,11 @@ void terminal_process_string(char *str) {
 		bool chargeEnabled = packState.chargeDesired && packState.chargeAllowed;
 		 
 		modCommandsPrintf("-----Battery Pack Status-----");		
-		modCommandsPrintf("Pack voltage          : %.2fV",packState.packVoltage);
+		modCommandsPrintf("Pack voltage Direct   : %.2fV",packState.packVoltage);
+		modCommandsPrintf("Pack voltage CVAverage: %.2fV",packState.cellVoltageAverage*generalConfig->noOfCellsSeries);		
 		modCommandsPrintf("Pack current          : %.2fA",packState.packCurrent);
-		modCommandsPrintf("Low  current          : %.2fA",packState.loCurrentLoadCurrent);
-		modCommandsPrintf("High current          : %.2fA",packState.hiCurrentLoadCurrent);		
+		modCommandsPrintf("LC Load voltage       : %.2fV",packState.loCurrentLoadVoltage);	
+		modCommandsPrintf("Low  current          : %.2fA",packState.loCurrentLoadCurrent);	
 		modCommandsPrintf("State of charge       : %.1f%%",generalStateOfCharge->generalStateOfCharge);
 		modCommandsPrintf("Remaining capacity    : %.2fAh",generalStateOfCharge->remainingCapacityAh);
 		
@@ -94,18 +97,23 @@ void terminal_process_string(char *str) {
 			case OP_STATE_EXTERNAL:
 				modCommandsPrintf("Operational state     : %s","External (USB or CAN)");
 				break;
+			case OP_STATE_STANDBY:
+				modCommandsPrintf("Operational state     : %s","Standby (Sprig, relays open)");
+				break;
 			default:
 				modCommandsPrintf("Operational state     : %s","Unknown");
 				break;
-		}
-		modCommandsPrintf("Load voltage          : %.2fV",packState.loCurrentLoadVoltage);
+		}	
 		modCommandsPrintf("Cell voltage high     : %.3fV",packState.cellVoltageHigh);
 		modCommandsPrintf("Cell voltage low      : %.3fV",packState.cellVoltageLow);
 		modCommandsPrintf("Cell voltage average  : %.3fV",packState.cellVoltageAverage);
 		modCommandsPrintf("Cell voltage mismatch : %.3fV",packState.cellVoltageMisMatch);
 		modCommandsPrintf("Discharge enabled     : %s",disChargeEnabled ? "True" : "False");
 		modCommandsPrintf("Charge enabled        : %s",chargeEnabled ? "True" : "False");	
-    modCommandsPrintf("Power button pressed  : %s",packState.powerButtonActuated ? "True" : "False");		
+    modCommandsPrintf("Power button pressed  : %s",packState.powerButtonActuated ? "True" : "False");	
+    modCommandsPrintf("CAN safety state      : %s",packState.safetyOverCANHCSafeNSafe	? "True" : "False");
+
+		
 		modCommandsPrintf("---End Battery Pack Status---");
 		modCommandsPrintf(" ");
 		
@@ -113,29 +121,17 @@ void terminal_process_string(char *str) {
 		modCommandsPrintf("-----       Sensors         -----");
 		
 		// print temperatures
-		modCommandsPrintf("Sensor[0]  : %.1f C - E - 'LTC NTC0'",packState.temperatures[0]);
-		modCommandsPrintf("Sensor[1]  : %.1f C - E - 'LTC NTC1'",packState.temperatures[1]);
-		modCommandsPrintf("Sensor[2]  : %.1f C - I - 'LTC Internal'",packState.temperatures[2]);
-		modCommandsPrintf("Sensor[3]  : %.1f C - I - 'STM NTC'",packState.temperatures[3]);
-		modCommandsPrintf("Sensor[4]  : %.1f C - E - 'ADC NTC0'",packState.temperatures[4]);
-		modCommandsPrintf("Sensor[5]  : %.1f C - E - 'ADC NTC1'",packState.temperatures[5]);
-		modCommandsPrintf("Sensor[6]  : %.1f C - E - 'ADC NTC2'",packState.temperatures[6]);
-		modCommandsPrintf("Sensor[7]  : %.1f C - E - 'ADC NTC3'",packState.temperatures[7]);
-		modCommandsPrintf("Sensor[8]  : %.1f C - E - 'ADC NTC4'",packState.temperatures[8]);
-		modCommandsPrintf("Sensor[9]  : %.1f C - E - 'ADC NTC5'",packState.temperatures[9]);
-		modCommandsPrintf("Sensor[10] : %.1f C - I - 'ADC NTC6'",packState.temperatures[10]);
-		modCommandsPrintf("Sensor[11] : %.1f C - I - 'ADC NTC7'",packState.temperatures[11]);
-		modCommandsPrintf("Sensor[12] : %.1f C - I - 'SHT'",packState.temperatures[12]);
-		modCommandsPrintf("Sensor[13] : %.1f %% - I - 'Humidity'",packState.humidity);		
-		modCommandsPrintf("----- E=External I=Internal -----");
+		modCommandsPrintf("Sensor[2]  : % 3.1f C - I - 'LTC Internal'",packState.temperatures[2]);
+		modCommandsPrintf("Sensor[3]  : % 3.1f C - I - 'STM NTC'",packState.temperatures[3]);	
 		modCommandsPrintf("-----     End sensors       -----");
+		modCommandsPrintf("----- E=External I=Internal -----");
 		modCommandsPrintf(" ");
 		
 	} else if (strcmp(argv[0], "cells") == 0) {
 		uint8_t cellPointer = 0;
 		
 		modCommandsPrintf("-----   Cell voltages   -----");				
-		for(cellPointer = 0 ; cellPointer < generalConfig->noOfCells ; cellPointer++) {
+		for(cellPointer = 0 ; cellPointer < generalConfig->noOfCellsSeries*generalConfig->noOfParallelModules ; cellPointer++) {
 			modCommandsPrintf("Cell voltage%2d             : %.3fV",cellPointer,packState.cellVoltagesIndividual[cellPointer].cellVoltage);
 		}
 		modCommandsPrintf("Cell voltage high          : %.3fV",packState.cellVoltageHigh);
@@ -147,7 +143,7 @@ void terminal_process_string(char *str) {
 		
 	} else if (strcmp(argv[0], "config") == 0) {
 		modCommandsPrintf("---   BMS Configuration   ---");
-		modCommandsPrintf("NoOfCells                  : %u",generalConfig->noOfCells);
+		modCommandsPrintf("NoOfCells                  : %u",generalConfig->noOfCellsSeries);
 		modCommandsPrintf("batteryCapacity            : %.2fAh",generalConfig->batteryCapacity);
 		modCommandsPrintf("cellHardUnderVoltage       : %.3fV",generalConfig->cellHardUnderVoltage);
 		modCommandsPrintf("cellHardOverVoltage        : %.3fV",generalConfig->cellHardOverVoltage);
@@ -190,7 +186,7 @@ void terminal_process_string(char *str) {
 			sscanf(argv[1], "%u", &newNumberOfCells);
 			if(newNumberOfCells < 13 && newNumberOfCells > 2) {
 				modCommandsPrintf("Number of cells is set to: %u.",newNumberOfCells);
-				generalConfig->noOfCells = newNumberOfCells;
+				generalConfig->noOfCellsSeries = newNumberOfCells;
 			} else {
 				modCommandsPrintf("Invalid number of cells (should be anything from 3 to 12).");
 			}
@@ -224,30 +220,9 @@ void terminal_process_string(char *str) {
 	} else if (strcmp(argv[0], "bootloader_jump") == 0) {
 		modFlashJumpToBootloader();
 		
-	} else if (strcmp(argv[0], "slave_scan") == 0) {
-		uint8_t bitPointer;
-		char    outputString[9];
-		uint8_t presence = modHiAmpShieldScanI2CDevices();
-		
-		modCommandsPrintf("------  Slave BMS I2C scan  ------");
-		
-		for(bitPointer = 0; bitPointer < 8; bitPointer++){
-		  if(presence & (1 << bitPointer))
-				outputString[7-bitPointer] = '1';
-			else
-				outputString[7-bitPointer] = '0';
-		}
-
-		outputString[8] = 0;
-		
-		modCommandsPrintf("Presence: 0b%s",outputString);
-		modCommandsPrintf("Bit order: 0(MSB) - 0 - FANDriver - NTCADC - IOExt - SHT - ISLAux - ISLMain(LSB). ");
-		modCommandsPrintf("SHT does not respond when it is doing a conversion.");
-		modCommandsPrintf("------  Slave BMS I2C scan end  ------");
-		
 	} else if (strcmp(argv[0], "help") == 0) {
 		modCommandsPrintf("------- Start of help -------");
-		modCommandsPrintf("Valid commands for the DieBieMS are:");
+		modCommandsPrintf("Valid commands for ENNOID-BMS are:");
 		modCommandsPrintf("help");
 		modCommandsPrintf("  Show this help.");
 		modCommandsPrintf("ping");
@@ -270,8 +245,6 @@ void terminal_process_string(char *str) {
 		modCommandsPrintf("  Read BMS configuration from EEPROM.");
 		modCommandsPrintf("hwinfo");
 		modCommandsPrintf("  Print some hardware information.");
-		modCommandsPrintf(" ");
-		modCommandsPrintf("---More functionallity to come...--");
 
 		for (int i = 0;i < callback_write;i++) {
 			if (callbacks[i].arg_names) {
@@ -321,7 +294,7 @@ void terminal_process_string(char *str) {
  * @param cbf
  * The callback function for the command.
  */
-void terminal_register_command_callback(
+void modTerminalRegisterCommandCallBack(
 		const char* command,
 		const char *help,
 		const char *arg_names,

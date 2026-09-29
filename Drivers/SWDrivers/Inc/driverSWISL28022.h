@@ -3,15 +3,9 @@
 
 #include "driverHWI2C2.h"
 #include "driverHWI2C1.h"
+#include "generalDefines.h"
 
-#define ISL28022_MASTER_ADDRES      0x40
 #define ISL28022_MASTER_BUS         2
-#define ISL28022_SHIELD_MAIN_ADDRES 0x44
-#define ISL28022_SHIELD_MAIN_BUS    1
-#define ISL28022_SHIELD_AUX_ADDRES  0x45
-#define ISL28022_SHIELD_AUX_BUS     1
-
-
 typedef enum {
 	BRNG_16V = 0,
 	BRNG_32V,
@@ -73,7 +67,7 @@ typedef struct {
 } driverSWISL28022InitStruct;
 
 void driverSWISL28022Init(uint8_t i2cAddres, uint8_t i2cBus, driverSWISL28022InitStruct initStruct);
-bool driverSWISL28022GetBusCurrent(uint8_t i2cAddres, uint8_t i2cBus, float *busCurrent, int16_t offset, float scalar);
-bool driverSWISL28022GetBusVoltage(uint8_t i2cAddres, uint8_t i2cBus, float *busVoltage, float scalar);
+bool driverSWISL28022GetBusCurrent(uint8_t i2cAddres, uint8_t i2cBus, float *busCurrent, float InitOffset, float scalar);
+bool driverSWISL28022GetBusVoltage(uint8_t i2cAddres, uint8_t i2cBus, float *busVoltage, int16_t offset, float scalar);
 
 #endif

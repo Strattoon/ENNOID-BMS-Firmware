@@ -1,10 +1,20 @@
 # Other parts of this project
-This is the firmware repository containing all firmware source files. There are three more repositories for this project:<br>
-[DieBieMS Hardware](https://github.com/DieBieEngineering/DieBieMS) The hardware sourcefiles.<br>
-[DieBieMS Bootloader](https://github.com/DieBieEngineering/DieBieMS-Bootloader) can be flashed with the BMS Tool in the firmware tab.<br>
-[DieBieMS Configuration tool](https://github.com/DieBieEngineering/DieBieMS-Tool) the tool to configure the BMS and upload the bootloader / update the main firmware.
 
-When attempting to install this firmware and bootloader you need to know the flash mapping. Make sure to use a microcontroller with at least 256kB of flash (eg the STM32F303CCT6 as described by the bom). When you use a lower size you cannot use the bootloader (flash is to small), when you use higher you don't utilize all the potential flash area.
+This is the firmware repository containing all firmware source files. There are three more repositories for this project:
+
+[ENNOID-BMS Hardware](https://github.com/EnnoidMe/ENNOID-BMS) The hardware sourcefiles.
+
+[ENNOID-BMS Bootloader](https://github.com/EnnoidMe/DieBieMS-Bootloader) Same as DieBieMS bootloader. Can be flashed with the BMS Tool in the firmware tab or with an STlink-V2. 
+
+[ENNOID-BMS Configuration tool](https://github.com/EnnoidMe/ENNOID-BMS-Tool) the tool to configure the ENNOID-BMS and upload the bootloader / update the main firmware.
+
+
+# Building with GCC
+
+- Install arm-none-eabi-gcc
+- Configure `generalDefines.h` for LV, HV, SS, or SS_LITE versions
+- Makefile has rules for flashing with STLink or JLink
+- Could also load using bootloader with binary
 
 When flashing the application the start address should be: <b>0x08000000</b>
 When flashing the bootloader the start address should be: <b>0x08032000</b>

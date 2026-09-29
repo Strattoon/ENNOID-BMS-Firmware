@@ -1,0 +1,41 @@
+# sprig-bms-can-v1-vectors v1
+# Authoritative test vectors for docs/architecture/sprig-bms-can-v1.md (#31).
+# Consumers: native/sprig-hybrid/tests/sprig_bms_decoder_test.cpp (decoder) and
+# ENNOID-BMS-Firmware tests/sprig/test_sprig_can.c (encoder, vendored copy pinned to an FD commit).
+# Values come from an independent reference implementation of the spec text, not from either consumer.
+#
+# Columns (tab-separated):
+#   case     unique name
+#   id       std:<hex> or ext:<hex>
+#   counter  alive counter the encoder is given, or - for rows no encoder produces
+#   frame    data bytes in hex (DLC = byte count)
+#   expect   decoded | bad_crc | wrong_version | wrong_length | repeated_counter | ignored | not_mine
+#   lost     lost_frames the decoder reports for a decoded row, or -
+#   fields   spec field=value pairs for a decoded row, or -
+#            Units are the spec's physical units; bitfield bytes are hex; "unavailable" is the
+#            spec's sentinel; a "!invalid" suffix means the receiver must mark that field Invalid.
+#
+# Rows run in order through ONE decoder, so alive-counter history carries across rows.
+state_energized	std:500	5	03 0A 9D 00 00 00 15 30	decoded	0	state=3 relay_outputs=0x0A permissions=0x9D faults_a=0x00 faults_b=0x00 last_open_reason=0
+state_precharge_failed	std:500	6	06 00 9D 00 01 04 16 07	decoded	0	state=6 relay_outputs=0x00 permissions=0x9D faults_a=0x00 faults_b=0x01 last_open_reason=4
+state_request_disagreement	std:500	7	03 0A 1D 00 40 00 17 49	decoded	0	state=3 relay_outputs=0x0A permissions=0x1D faults_a=0x00 faults_b=0x40 last_open_reason=0
+state_standby_hvil_open	std:500	8	01 00 9D 00 20 00 18 BD	decoded	0	state=1 relay_outputs=0x00 permissions=0x9D faults_a=0x00 faults_b=0x20 last_open_reason=0
+pack_discharging	std:501	9	0F 2C 02 0B 0F 1D 19 77	decoded	0	pack_voltage=388.4 pack_current=52.3 bus_voltage=386.9
+pack_charging_bus_unavailable	std:501	10	0F 3D FF 83 FF FF 1A D6	decoded	0	pack_voltage=390.1 pack_current=-12.5 bus_voltage=unavailable
+limits	std:502	0	05 DC 01 2C 1D C9 10 66	decoded	0	discharge_current_limit=150.0 charge_current_limit=30.0 state_of_charge=76.25
+cells	std:503	15	0E 80 0E 9D 11 2A 1F CF	decoded	0	cell_voltage_min=3712 cell_voltage_max=3741 cell_index_min=17 cell_index_max=42
+temps_warm	std:504	3	01 3A 01 21 29 FF 13 B3	decoded	0	cell_temp_max=31.4 cell_temp_avg=28.9 bms_temp_max=41
+temps_cold	std:504	4	FF CC FF BA F6 FF 14 80	decoded	0	cell_temp_max=-5.2 cell_temp_avg=-7.0 bms_temp_max=-10
+energy	std:505	1	01 8D 02 08 6E FF 11 9A	decoded	0	remaining_capacity=3.97 full_capacity=5.20 series_cells=110
+ident	std:50F	2	66 B4 D3 22 03 02 12 4B	decoded	0	firmware_build=0x66B4D322 config_revision=3 hardware_id=2
+bad_crc_flipped_bit	std:500	-	03 0A 9C 00 00 00 15 30	bad_crc	-	-
+wrong_version_2	std:500	-	03 0A 9D 00 00 00 25 7A	wrong_version	-	-
+wrong_length_7	std:500	-	03 0A 9D 00 00 00 15	wrong_length	-	-
+counter_next	std:500	9	03 0A 9D 00 00 00 19 AC	decoded	0	state=3 relay_outputs=0x0A permissions=0x9D faults_a=0x00 faults_b=0x00 last_open_reason=0
+counter_repeated	std:500	-	03 0A 9D 00 00 00 19 AC	repeated_counter	-	-
+counter_jump_two_lost	std:500	12	03 0A 9D 00 00 00 1C C5	decoded	2	state=3 relay_outputs=0x0A permissions=0x9D faults_a=0x00 faults_b=0x00 last_open_reason=0
+state_reserved_values	std:500	13	0B 12 00 00 00 07 1D 88	decoded	0	state=11!invalid relay_outputs=0x12!invalid permissions=0x00 faults_a=0x00 faults_b=0x00 last_open_reason=7!invalid
+ident_unknown_hardware	std:50F	3	17 A4 27 C4 03 03 13 FF	decoded	0	firmware_build=0x17A427C4 config_revision=3 hardware_id=3!invalid
+reserved_id_50A	std:50A	-	00 00 00 00 00 00 00 00	ignored	-	-
+neighbour_id_4FF	std:4FF	-	00 00 00 00 00 00 00 00	not_mine	-	-
+extended_id	ext:500	-	03 0A 9D 00 00 00 15 30	not_mine	-	-

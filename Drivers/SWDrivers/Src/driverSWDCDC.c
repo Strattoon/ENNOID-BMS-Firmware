@@ -1,11 +1,15 @@
 #include "driverSWDCDC.h"
 
 bool driverSWDCDCEnabledState;
+bool driverSWDCDCEnabledPinState;
 bool driverSWDCDCEnabledDesiredState;
-modPowerElectricsPackStateTypedef *driverSWDCDCPackStateHandle;
+uint32_t driverSWDCDCEnabledTurnOnDelayLastTick;
+modPowerElectronicsPackStateTypedef *driverSWDCDCPackStateHandle;
+modConfigGeneralConfigStructTypedef *driverSWDCDCGeneralConfigHandle;
 
-void driverSWDCDCInit(modPowerElectricsPackStateTypedef* packStateHandle){
+void driverSWDCDCInit(modPowerElectronicsPackStateTypedef* packStateHandle, modConfigGeneralConfigStructTypedef* generalConfigHandle) {
 	driverSWDCDCPackStateHandle = packStateHandle;
+	driverSWDCDCGeneralConfigHandle = generalConfigHandle;
 	
 	driverSWISL28022InitStruct ISLInitStruct;
 	ISLInitStruct.ADCSetting = ADC_128_64010US;																														// Init the bus voltage and current monitors. (AUX)
@@ -23,6 +27,9 @@ void driverSWDCDCInit(modPowerElectricsPackStateTypedef* packStateHandle){
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+	
+	driverSWDCDCSetEnablePin(false);
+	driverSWDCDCEnabledTurnOnDelayLastTick = HAL_GetTick();
 };
 
 void driverSWDCDCSetEnabledState(bool newEnabledState){
@@ -38,20 +45,36 @@ bool driverSWDCDCGetOKState(void){
 };
 
 void driverSWDCDCEnableTask(void){
-	if(driverSWDCDCEnabledState != (driverSWDCDCEnabledDesiredState && driverSWDCDCPackStateHandle->disChargeLCAllowed && driverSWDCDCPackStateHandle->disChargeDesired)){
-		driverSWDCDCEnabledState = driverSWDCDCEnabledDesiredState;
-		
-		if(driverSWDCDCEnabledState){
-			HAL_GPIO_WritePin(GPIOB, OLED_RST_Pin, GPIO_PIN_SET);
+	if(driverSWDCDCEnabledState != (driverSWDCDCEnabledDesiredState && driverSWDCDCPackStateHandle->disChargeLCAllowed && driverSWDCDCPackStateHandle->disChargeDesired && (driverSWDCDCPackStateHandle->operationalState == OP_STATE_LOAD_ENABLED))){
+		if(driverSWDCDCEnabledDesiredState){
+			if(modDelayTick1ms(&driverSWDCDCEnabledTurnOnDelayLastTick,500))
+				driverSWDCDCEnabledState = driverSWDCDCEnabledDesiredState;
 		}else{
-			HAL_GPIO_WritePin(GPIOB, OLED_RST_Pin, GPIO_PIN_RESET);
+			driverSWDCDCEnabledState = driverSWDCDCEnabledDesiredState;
 		}
+			
+		driverSWDCDCSetEnablePin(driverSWDCDCEnabledState);
+	}else{
+	  driverSWDCDCEnabledTurnOnDelayLastTick = HAL_GetTick();
 	}
 };
 
+void driverSWDCDCSetEnablePin(bool desiredEnableState) {
+	if(false)
+		driverSWDCDCEnabledPinState = !desiredEnableState;
+	else
+		driverSWDCDCEnabledPinState = desiredEnableState;
+	
+	if(driverSWDCDCEnabledPinState){
+		HAL_GPIO_WritePin(GPIOB, OLED_RST_Pin, GPIO_PIN_SET);
+	}else{
+		HAL_GPIO_WritePin(GPIOB, OLED_RST_Pin, GPIO_PIN_RESET);
+	}
+}
+
 float driverSWDCDCGetAuxVoltage(void) {
 	float auxVoltage = 0.0f;
-	driverSWISL28022GetBusVoltage(ISL28022_SHIELD_AUX_ADDRES,ISL28022_SHIELD_AUX_BUS,&auxVoltage,0.004f);
+	driverSWISL28022GetBusVoltage(ISL28022_SHIELD_AUX_ADDRES,ISL28022_SHIELD_AUX_BUS,&auxVoltage,0,1.0f);
 	return auxVoltage;
 };
 
